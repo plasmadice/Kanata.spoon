@@ -1,0 +1,100 @@
+# Changelog
+
+All notable changes to Kanata.spoon will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.1] - 2025-10-14
+
+### Fixed
+- **Kanata Detection**: Fixed issue where Kanata binary couldn't be found at startup
+  - Now checks common installation paths (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, etc.)
+  - No longer relies solely on PATH environment variable
+  - Caches binary path for better performance
+  - GUI applications on macOS don't always inherit terminal PATH, this fix resolves that
+
+### Changed
+- **Menu Bar Icons**: 
+  - 🔎 icon now shows when monitoring is active but Kanata service is not running
+  - ⌨️ icon shows when both monitoring and Kanata service are running
+  - 😵️ icon shows when monitoring is inactive
+- **Menu Controls**: 
+  - Renamed "Monitoring..." to "Monitoring Inputs..." for clarity
+  - "Monitoring Inputs..." button now only stops monitoring (not the Kanata service)
+  - Improved menu item descriptions and tooltips
+
+## [1.0.0] - 2025-10-13
+
+### Features
+- Automatic device monitoring and Kanata restart
+- Menu bar controls
+- Raycast integration (optional)
+- Config validation on changes
+- Sleep/wake handling
+- Auto-start at boot
+- URL scheme support
+
+### Menu Controls
+- **Start/Stop Service** - Controls both Kanata and monitoring
+- **Start/Stop Monitor** - Controls monitoring only
+- Raycast commands (when enabled)
+- Config file access
+- Hammerspoon preferences and console
+
+### Added
+- Initial release of Kanata.spoon
+- Device monitoring and automatic Kanata restart on new device detection
+- Menu bar controls with toggleable monitoring
+- Optional Raycast integration via deeplinks
+- Config file validation on changes
+- Device filtering support (respects `macos-dev-names-include` and `macos-dev-names-exclude`)
+- Sleep/wake handling (auto-stop on sleep, auto-resume on wake)
+- URL scheme support (`hammerspoon://kanata?action=start/stop/toggle`)
+- Auto-start Kanata service at boot with requirement validation
+- Show Console menu option
+- Quit Hammerspoon menu option
+- Configurable check intervals
+- Optional menu bar display
+- Comprehensive logging with hs.logger
+- Example configuration file
+- Complete documentation (README, RAYCAST guide, AUTOSTART guide, QUICKSTART)
+- MIT License
+
+### Features
+- **Device Monitoring**: Automatically detects new input devices and restarts Kanata
+- **Menu Bar Integration**: Quick access to controls via menu bar icon
+- **Raycast Integration**: Optional Raycast script commands in menu
+- **Config Validation**: Validates Kanata config changes before reloading
+- **Device Filtering**: Respects device include/exclude lists from Kanata config
+- **Sleep/Wake Handling**: Intelligently manages monitoring during sleep/wake cycles
+- **URL Scheme**: Control via `hammerspoon://kanata?action=start/stop/toggle`
+- **Auto-Start**: Optional automatic Kanata service start at boot
+- **Highly Configurable**: All paths, intervals, and behaviors can be customized
+
+### Scripts Included
+- `kanata-install.sh`: Install and configure Kanata
+- `kanata-restart.sh`: Restart Kanata service
+- `kanata-stop.sh`: Stop Kanata service
+- `kanata-cleanup.sh`: Clean up and uninstall Kanata
+
+### Documentation
+- README.md: Complete documentation with features, installation, and API reference
+- RAYCAST.md: Raycast integration setup guide
+- AUTOSTART.md: Autostart configuration guide
+- QUICKSTART.md: 5-minute quick start guide
+- config.example.lua: Comprehensive example configuration
+- Inline code documentation
+
+### Technical Details
+- Spoon follows Hammerspoon Spoon conventions
+- Uses `hs.timer` for periodic device checks
+- Uses `hs.pathwatcher` for config file monitoring
+- Uses `hs.caffeinate.watcher` for sleep/wake events
+- Uses `hs.urlevent` for URL scheme handling
+- Uses `hs.menubar` for menu bar integration
+- Uses `hs.task` for running external scripts
+
+---
+
+[1.0.0]: https://github.com/plasmadice/Kanata.spoon/releases/tag/v1.0.0
