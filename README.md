@@ -31,22 +31,39 @@ spoon.Kanata:start()
 
 ## Configuration
 
+The preferred way to configure Kanata.spoon is using the object property syntax:
+
 ```lua
 hs.loadSpoon("Kanata")
 
--- Required for autostart
-spoon.Kanata.restartScript = "Spoons/Kanata.spoon/scripts/kanata-restart.sh"
+-- Set logger level (options: 'debug', 'info', 'warn', 'error', 'nothing')
+spoon.Kanata.logger.setLogLevel('info')
 
--- Optional
-spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
-spoon.Kanata.checkInterval = 5  -- Check for new devices every 5 seconds
-spoon.Kanata.showMenuBar = true
-spoon.Kanata.startMonitoringOnLoad = false
-spoon.Kanata.autoStartKanata = false
-spoon.Kanata.useRaycast = false  -- Enable Raycast integration
+-- Core configuration
+spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"  -- Optional
+spoon.Kanata.restartScript = "Spoons/Kanata.spoon/scripts/kanata-restart.sh"  -- Required for autostart
 
+-- Monitoring configuration
+spoon.Kanata.checkInterval = 5  -- Seconds between device checks
+spoon.Kanata.port = 10000  -- Port for health check API (optional)
+
+-- UI configuration
+spoon.Kanata.showMenuBar = true  -- Show menu bar icon
+
+-- Auto-start configuration
+spoon.Kanata.startMonitoringOnLoad = false  -- Auto-start monitoring
+spoon.Kanata.autoStartKanata = false  -- Auto-start Kanata service
+
+-- Raycast integration
+spoon.Kanata.useRaycast = false  -- Enable Raycast commands
+
+-- Start the spoon
 spoon.Kanata:start()
 ```
+
+### Complete Configuration
+
+For a complete configuration with all available options and detailed comments, see `config.example.lua` in the spoon directory.
 
 ### Raycast Integration
 
@@ -65,12 +82,29 @@ To add Raycast commands to the menu:
 
 See [RAYCAST.md](RAYCAST.md) for detailed setup.
 
+### Health Check API
+
+When Kanata is started with a port (e.g., `kanata -p 10000`), the spoon can use the JSON API for health checking:
+
+```lua
+spoon.Kanata.port = 10000  -- Enable health check via API
+```
+
+**Benefits:**
+- More reliable than process-based detection
+- Verifies Kanata is actually responding, not just running
+- Works with any port number
+
+**How it works:**
+- Sends `{"RequestCurrentLayerName":{}}` to the configured port
+- Expects response like `{"CurrentLayerName":{"name":"base"}}` or `{"LayerChange":{"new":"base"}}`
+- Falls back to process detection if port not configured
+
 ## Menu Bar
 
 Click the ⌨️ icon for:
 
 - **Start/Stop Service** - Controls both Kanata service and monitoring
-- **Start/Stop Monitor** - Controls monitoring only
 - **Restart Kanata** (Raycast) - Opens Raycast command
 - **Stop Kanata** (Raycast) - Opens Raycast command
 - **Cleanup Kanata** (Raycast) - Opens Raycast command

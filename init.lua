@@ -12,7 +12,7 @@ obj.__index = obj
 
 -- Metadata
 obj.name = "Kanata"
-obj.version = "1.0.1"
+obj.version = "1.0.2"
 obj.author = "plasmadice"
 obj.homepage = "https://github.com/plasmadice/Kanata.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -62,6 +62,13 @@ obj.startMonitoringOnLoad = false
 --- If enabled but requirements missing, will show alert and open console
 obj.autoStartKanata = false
 
+--- Kanata.port
+--- Variable
+--- Port number for Kanata health check API (optional)
+--- When provided, enables health check via JSON API to determine if Kanata is running and healthy
+--- If not set or nil, falls back to process-based detection
+obj.port = nil
+
 -- Internal state
 obj.isMonitoring = false
 obj.wasMonitoringBeforeSleep = false
@@ -73,6 +80,10 @@ obj.menuBar = nil
 obj.configWatcher = nil
 obj.configChangeTimer = nil
 obj.kanataBinaryPath = nil  -- Stores the actual path to kanata binary
+obj.restartAnimationTimer = nil  -- Timer for restart animation
+obj.restartAnimationStep = 0  -- Animation step counter
+obj.originalIcon = nil  -- Store original menu bar icon
+obj.recentlyRemovedDevices = {}  -- Track recently removed devices for reconnection detection
 
 --- Kanata:init()
 --- Method
@@ -100,6 +111,11 @@ end
 ---  * The Kanata object
 function obj:start()
   self.logger.i("Starting Kanata Spoon")
+  self.logger.i("Kanata Spoon version: " .. self.version)
+  self.logger.i("Check interval: " .. self.checkInterval .. " seconds")
+  self.logger.i("Config path: " .. (self.kanataConfigPath or "not set"))
+  self.logger.i("Restart script: " .. (self.restartScript or "not set"))
+  self.logger.i("Port for health check: " .. (self.port or "not set"))
   
   -- Enable AppleScript if using Raycast
   if self.useRaycast then
@@ -131,7 +147,10 @@ function obj:start()
   
   -- Start monitoring if configured to do so
   if self.startMonitoringOnLoad then
+    self.logger.i("Auto-starting monitoring service...")
     self:startMonitoring()
+  else
+    self.logger.i("Monitoring not auto-started (startMonitoringOnLoad = false)")
   end
   
   return self
@@ -158,6 +177,12 @@ function obj:stop()
   if self.configChangeTimer then
     self.configChangeTimer:stop()
     self.configChangeTimer = nil
+  end
+  
+  -- Clean up restart animation
+  if self.restartAnimationTimer then
+    self.restartAnimationTimer:stop()
+    self.restartAnimationTimer = nil
   end
   
   -- Remove menu bar
@@ -198,8 +223,11 @@ function obj:startMonitoring(suppressLog)
   
   -- Initialize device list
   local prevDevices = self:getKanataDeviceList()
+  self.logger.i("Initial device list: " .. self:getDeviceListString(prevDevices))
   
   self.kanataWatcher = hs.timer.doEvery(self.checkInterval, function()
+    self.logger.d("Checking for device changes...")
+    
     if not self:isKanataAvailable() then
       self.logger.e("Kanata no longer available, stopping monitoring service")
       self:stopMonitoring()
@@ -210,10 +238,38 @@ function obj:startMonitoring(suppressLog)
     local currDevices = self:getKanataDeviceList()
     local newDevices, removedDevices = self:getDeviceChanges(prevDevices, currDevices)
 
-    -- Log removed devices
+    -- Debug logging for device detection
+    self.logger.d("Device check - Previous: " .. self:getDeviceListString(prevDevices) .. ", Current: " .. self:getDeviceListString(currDevices))
+    self.logger.d("Device changes - Added: " .. #newDevices .. ", Removed: " .. #removedDevices)
+
+    -- Log removed devices with include/exclude info
     if #removedDevices > 0 then
-      local removedList = table.concat(removedDevices, ", ")
-      self.logger.i("Device(s) removed: " .. removedList)
+      self:logDeviceFilteringInfo(removedDevices, "removed")
+      
+      -- Track removed devices for reconnection detection
+      for _, deviceName in ipairs(removedDevices) do
+        self.recentlyRemovedDevices[deviceName] = true
+      end
+      
+      -- Clean up old entries after 30 seconds
+      hs.timer.doAfter(30, function()
+        for deviceName, _ in pairs(self.recentlyRemovedDevices) do
+          self.recentlyRemovedDevices[deviceName] = nil
+        end
+      end)
+    end
+
+    -- Log added devices with include/exclude info
+    if #newDevices > 0 then
+      self:logDeviceFilteringInfo(newDevices, "added")
+      
+      -- Check if any of these devices were recently removed (reconnection)
+      for _, deviceName in ipairs(newDevices) do
+        if self.recentlyRemovedDevices and self.recentlyRemovedDevices[deviceName] then
+          self.logger.i("Device reconnected: " .. deviceName)
+          self.recentlyRemovedDevices[deviceName] = nil
+        end
+      end
     end
 
     -- Restart if new devices detected
@@ -224,6 +280,7 @@ function obj:startMonitoring(suppressLog)
     prevDevices = currDevices
   end)
   
+  self.logger.i("Device monitoring timer started - checking every " .. self.checkInterval .. " seconds")
   self:updateMenuBar()
   hs.alert.show("Kanata monitoring started")
   
@@ -326,11 +383,43 @@ function obj:getKanataCommand()
 end
 
 function obj:isKanataServiceRunning()
-  -- Check if Kanata process is running with port 10000
-  -- Note: lsof -i:10000 doesn't work for root processes without sudo,
-  -- so we check the process list instead
-  local psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*10000'")
+  -- If port is configured, use health check API
+  if self.port then
+    return self:checkKanataHealth()
+  end
+  
+  -- Fallback to process-based detection
+  local psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*" .. (self.port or "10000") .. "'")
   return psOutput and psOutput ~= ""
+end
+
+function obj:checkKanataHealth()
+  if not self.port then
+    return false
+  end
+  
+  -- Send JSON request to get current layer name
+  local jsonRequest = '{"RequestCurrentLayerName":{}}'
+  local command = string.format('echo '%s' | nc -w1 127.0.0.1 %d', jsonRequest, self.port)
+  
+  local result = hs.execute(command)
+  if not result or result == "" then
+    return false
+  end
+  
+  -- Check if response contains valid JSON with layer information
+  -- Expected responses:
+  -- {"LayerChange":{"new":"base"}}
+  -- {"CurrentLayerName":{"name":"base"}}
+  local hasLayerInfo = result:match('"name":') or result:match('"new":')
+  
+  if hasLayerInfo then
+    self.logger.d("Kanata health check successful - port " .. self.port)
+    return true
+  else
+    self.logger.d("Kanata health check failed - invalid response: " .. result)
+    return false
+  end
 end
 
 function obj:startKanataService()
@@ -570,7 +659,101 @@ function obj:getDeviceChanges(prev, curr)
   return added, removed
 end
 
+function obj:getDeviceListString(devices)
+  local deviceList = {}
+  for name, _ in pairs(devices) do
+    table.insert(deviceList, name)
+  end
+  return table.concat(deviceList, ", ")
+end
+
+function obj:logDeviceFilteringInfo(devices, action)
+  -- Log which devices were included/excluded based on config
+  if not self.kanataConfigPath or self.kanataConfigPath == "" then
+    self.logger.d("No config file set - all devices will be monitored")
+    return
+  end
+  
+  local includedCount = 0
+  local excludedCount = 0
+  local includedDevices = {}
+  local excludedDevices = {}
+  
+  for _, deviceName in ipairs(devices) do
+    if self:shouldMonitorDevice(deviceName) then
+      includedCount = includedCount + 1
+      table.insert(includedDevices, deviceName)
+    else
+      excludedCount = excludedCount + 1
+      table.insert(excludedDevices, deviceName)
+    end
+  end
+  
+  if includedCount > 0 then
+    local includedList = table.concat(includedDevices, ", ")
+    if self.useIncludeList then
+      self.logger.i("Devices " .. action .. " (included by macos-dev-names-include): " .. includedList)
+    else
+      self.logger.i("Devices " .. action .. " (not excluded by macos-dev-names-exclude): " .. includedList)
+    end
+  end
+  
+  if excludedCount > 0 then
+    local excludedList = table.concat(excludedDevices, ", ")
+    if self.useIncludeList then
+      self.logger.i("Devices " .. action .. " (excluded by macos-dev-names-include): " .. excludedList)
+    else
+      self.logger.i("Devices " .. action .. " (excluded by macos-dev-names-exclude): " .. excludedList)
+    end
+  end
+  
+  -- Log filtering mode for debugging
+  if self.useIncludeList then
+    self.logger.d("Using include mode - only devices in macos-dev-names-include are monitored")
+  elseif #self.excludedDevices > 0 then
+    self.logger.d("Using exclude mode - all devices except those in macos-dev-names-exclude are monitored")
+  else
+    self.logger.d("No filtering configured - all devices are monitored")
+  end
+end
+
+function obj:showRestartAnimation()
+  if not self.menuBar then
+    return
+  end
+  
+  -- Store original icon
+  self.originalIcon = self.menuBar:title()
+  
+  -- Start animation with refresh icon
+  self.restartAnimationTimer = hs.timer.doEvery(0.3, function()
+    if self.restartAnimationStep == 0 then
+      self.menuBar:setTitle("🔄")
+      self.restartAnimationStep = 1
+    elseif self.restartAnimationStep == 1 then
+      self.menuBar:setTitle("⏳")
+      self.restartAnimationStep = 2
+    else
+      self.menuBar:setTitle("⚡")
+      self.restartAnimationStep = 0
+    end
+  end)
+  
+  self.restartAnimationStep = 0
+  
+  -- Stop animation after 3 seconds
+  hs.timer.doAfter(3, function()
+    if self.restartAnimationTimer then
+      self.restartAnimationTimer:stop()
+      self.restartAnimationTimer = nil
+    end
+    self:updateMenuBar()
+  end)
+end
+
 function obj:restartKanata(newDevices, suppressLog)
+  self.logger.i("restartKanata called with devices: " .. table.concat(newDevices, ", "))
+  
   if not self:isKanataAvailable() then
     self.logger.e("Kanata not available, stopping monitoring service")
     self:stopMonitoring()
@@ -579,7 +762,17 @@ function obj:restartKanata(newDevices, suppressLog)
   end
   
   local deviceList = table.concat(newDevices, ", ")
-  self.logger.i("New device(s) detected: " .. deviceList .. " - Restarting Kanata")
+  
+  -- Check if Kanata service is already running
+  local wasRunning = self:isKanataServiceRunning()
+  if wasRunning then
+    self.logger.i("Kanata service already running - restarting due to new device(s): " .. deviceList)
+  else
+    self.logger.i("New device(s) detected: " .. deviceList .. " - Starting Kanata")
+  end
+  
+  -- Show restart animation in menu bar
+  self:showRestartAnimation()
   
   -- Determine which restart script to use
   local scriptPath = self.restartScript
@@ -769,18 +962,6 @@ function obj:updateMenuBar()
     })
   end
   
-  -- Monitoring-only controls
-  if self.isMonitoring then
-    table.insert(menu, {
-      title = "Monitoring Inputs...",
-      fn = function() self:stopMonitoring() end
-    })
-  else
-    table.insert(menu, {
-      title = "Start Monitoring",
-      fn = function() self:startMonitoring() end
-    })
-  end
   
   -- Add Raycast commands if enabled
   if self.useRaycast then

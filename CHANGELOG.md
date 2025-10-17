@@ -5,6 +5,40 @@ All notable changes to Kanata.spoon will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2025-10-14
+
+### Added
+- **Health Check API**: New port-based health checking system
+  - Added `port` variable for configuring Kanata API port (e.g., `kanata -p 10000`)
+  - Uses JSON API to verify Kanata is running and healthy, not just the process
+  - Sends `{"RequestCurrentLayerName":{}}` and validates response
+  - Falls back to process-based detection when port not configured
+  - More reliable than checking process list alone
+
+### Changed
+- **Menu Bar**: Simplified menu options
+  - Removed "Monitoring Inputs..." and "Start Monitoring" options to reduce redundancy
+  - "Start/Stop Service" controls both Kanata service and monitoring
+- **Health Detection**: Improved Kanata service detection logic
+  - When port is configured, uses API health check instead of process detection
+  - Better reliability for determining if Kanata is actually responding
+- **Logging**: Enhanced device detection logging
+  - Added detailed logging for device additions and removals
+  - Shows which devices are included/excluded by config sections
+  - Logs when service is restarted while already running
+- **Menu Bar Animation**: Added restart animation
+  - Shows 🔄/⏳/⚡ animation when Kanata is restarting
+  - Visual feedback for device detection and service restarts
+  - Fixed tooltip method error in animation function
+- **Device Reconnection Detection**: Enhanced device tracking
+  - Added specific "Device reconnected" logging for devices that were recently removed
+  - Tracks recently removed devices for 30 seconds to detect reconnections
+  - Added debug logging to help troubleshoot device detection issues
+- **Logging Cleanup**: Simplified log messages
+  - Removed redundant "*** DEVICE(S) REMOVED/ADDED ***" messages
+  - Removed "Showing restart animation" message
+  - Rely on detailed filtering info messages instead
+
 ## [1.0.1] - 2025-10-14
 
 ### Fixed
