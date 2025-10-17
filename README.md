@@ -203,7 +203,7 @@ Stops both Kanata service and monitoring.
 - [Hammerspoon](https://www.hammerspoon.org/) 0.9.90+
 - [Kanata](https://github.com/jtroo/kanata) 
 - [Karabiner-Elements](https://karabiner-elements.pqrs.org/) (required by Kanata)
-- [Configure permissions](https://github.com/jtroo/kanata/issues/1264#issuecomment-2763085239)
+- [Configure permissions for Kanata and Karabiner Elements](https://github.com/jtroo/kanata/issues/1264#issuecomment-2763085239)
 
 ## License
 
