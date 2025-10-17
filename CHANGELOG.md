@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed redundant "*** DEVICE(S) REMOVED/ADDED ***" messages
   - Removed "Showing restart animation" message
   - Rely on detailed filtering info messages instead
+- **Auto-start Fix**: Fixed port-based health check conflict
+  - Auto-start now uses process-based detection instead of health check API
+  - Prevents chicken-and-egg problem when port is configured
+  - Service will start automatically even when port-based health check is enabled
 
 ## [1.0.1] - 2025-10-14
 

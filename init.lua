@@ -389,6 +389,11 @@ function obj:isKanataServiceRunning()
   end
   
   -- Fallback to process-based detection
+  return self:isKanataServiceRunningProcessBased()
+end
+
+function obj:isKanataServiceRunningProcessBased()
+  -- Always use process-based detection (for autostart checks)
   local psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*" .. (self.port or "10000") .. "'")
   return psOutput and psOutput ~= ""
 end
@@ -400,7 +405,7 @@ function obj:checkKanataHealth()
   
   -- Send JSON request to get current layer name
   local jsonRequest = '{"RequestCurrentLayerName":{}}'
-  local command = string.format('echo '%s' | nc -w1 127.0.0.1 %d', jsonRequest, self.port)
+  local command = string.format('echo "%s" | nc -w1 127.0.0.1 %d', jsonRequest, self.port)
   
   local result = hs.execute(command)
   if not result or result == "" then
@@ -495,7 +500,9 @@ function obj:handleAutoStart()
   end
   
   -- All requirements met, check if Kanata is already running
-  if self:isKanataServiceRunning() then
+  -- Use process-based detection for autostart check (not health check API)
+  local isRunning = self:isKanataServiceRunningProcessBased()
+  if isRunning then
     self.logger.i("Kanata service is already running, skipping autostart")
     return
   end
@@ -977,12 +984,12 @@ function obj:updateMenuBar()
       fn = function() self:openRaycastCommand("kanata-stop") end
     })
     table.insert(menu, {
-      title = "Cleanup Kanata",
-      fn = function() self:openRaycastCommand("kanata-cleanup") end
-    })
-    table.insert(menu, {
       title = "Install Kanata",
       fn = function() self:openRaycastCommand("kanata-install") end
+    })
+    table.insert(menu, {
+      title = "Uninstall Kanata",
+      fn = function() self:openRaycastCommand("kanata-uninstall") end
     })
   end
   

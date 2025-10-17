@@ -1,6 +1,29 @@
 -- Example configuration for Kanata.spoon
 -- Copy this file to your ~/.hammerspoon/init.lua and customize as needed
 
+--[[
+====================================
+Example shorthand comments
+====================================
+]]
+-- hs.loadSpoon("Kanata")
+-- spoon.Kanata.restartScript = "Spoons/Kanata.spoon/scripts/kanata-restart.sh" -- Required: Path to restart script
+-- spoon.Kanata.logger.setLogLevel('info') -- Optional: Set logger level ('debug', 'info', 'warn', 'error', 'nothing')
+-- spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd" -- Optional: Path to Kanata config file (default: nil)
+-- spoon.Kanata.checkInterval = 5 -- Optional: Check interval in seconds (default: 5)
+-- spoon.Kanata.port = 10000 -- Optional: Port for health check API (default: nil)
+-- spoon.Kanata.showMenuBar = true -- Optional: Show menu bar icon (default: true)
+-- spoon.Kanata.startMonitoringOnLoad = true -- Optional: Start monitoring automatically when spoon loads (default: false)
+-- spoon.Kanata.autoStartKanata = true -- Optional: Auto-start Kanata service at system boot (default: false)
+-- spoon.Kanata.useRaycast = true -- Optional: Use Raycast commands for menu integration (default: false)
+-- spoon.Kanata:start()
+
+--[[
+====================================
+Complete configuration example
+====================================
+--]]
+
 -- Load the Kanata Spoon
 hs.loadSpoon("Kanata")
 

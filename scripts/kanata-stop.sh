@@ -62,12 +62,3 @@ if open -g "hammerspoon://kanata?action=stop" 2>/dev/null; then
 else
     echo "⚠️  Failed to stop Hammerspoon monitoring service - it may not be available"
 fi
-
-
-
-
-
-
-
-
-

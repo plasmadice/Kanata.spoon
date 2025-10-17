@@ -162,4 +162,3 @@ echo
 echo "Note: You may need to manually remove Kanata from:"
 echo "- System Preferences > Security & Privacy > Privacy > Accessibility"
 echo "- System Preferences > Security & Privacy > Privacy > Input Monitoring"
-
