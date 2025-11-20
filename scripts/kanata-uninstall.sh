@@ -62,21 +62,33 @@ else
     warning "Failed to stop Hammerspoon monitoring service - it may not be available"
 fi
 
-# 2. Stop Kanata service
+# 2. Stop Kanata service (try both LaunchDaemon and LaunchAgent)
 debug "Stopping Kanata service"
-echo "$cli_password" | sudo -S launchctl bootout system "${PLIST_DIR}/com.example.kanata.plist" 2>/dev/null || debug "Kanata service not running or already stopped"
+# Try to stop old LaunchDaemon (if it exists)
+echo "$cli_password" | sudo -S launchctl bootout system /Library/LaunchDaemons/com.example.kanata.plist 2>/dev/null || debug "Old LaunchDaemon not running"
+# Try to stop LaunchAgent
+launchctl bootout gui/$(id -u)/com.example.kanata 2>/dev/null || launchctl unload "${HOME}/Library/LaunchAgents/com.example.kanata.plist" 2>/dev/null || debug "LaunchAgent not running"
 success "Kanata service stopped"
 
-# 3. Remove Kanata plist file
-debug "Removing Kanata plist file"
-if [ -f "${PLIST_DIR}/com.example.kanata.plist" ]; then
-    if echo "$cli_password" | sudo -S rm -f "${PLIST_DIR}/com.example.kanata.plist"; then
-        success "Removed Kanata plist file"
+# 3. Remove Kanata plist files (both old and new locations)
+debug "Removing Kanata plist files"
+# Remove old LaunchDaemon plist
+if [ -f "/Library/LaunchDaemons/com.example.kanata.plist" ]; then
+    if echo "$cli_password" | sudo -S rm -f "/Library/LaunchDaemons/com.example.kanata.plist"; then
+        success "Removed old LaunchDaemon plist file"
     else
-        warning "Failed to remove Kanata plist file"
+        warning "Failed to remove old LaunchDaemon plist file"
+    fi
+fi
+# Remove LaunchAgent plist
+if [ -f "${HOME}/Library/LaunchAgents/com.example.kanata.plist" ]; then
+    if rm -f "${HOME}/Library/LaunchAgents/com.example.kanata.plist"; then
+        success "Removed LaunchAgent plist file"
+    else
+        warning "Failed to remove LaunchAgent plist file"
     fi
 else
-    debug "Kanata plist file not found, skipping"
+    debug "LaunchAgent plist file not found, skipping"
 fi
 
 # 4. Kill any running Kanata processes
@@ -100,16 +112,25 @@ else
     debug "Homebrew not found, skipping kanata uninstall"
 fi
 
-# 6. Remove log directory
-debug "Removing log directory"
+# 6. Remove log directories (both old and new locations)
+debug "Removing log directories"
+# Remove old system log directory
 if [ -d "/Library/Logs/Kanata" ]; then
     if echo "$cli_password" | sudo -S rm -rf "/Library/Logs/Kanata"; then
-        success "Removed log directory"
+        success "Removed old system log directory"
     else
-        warning "Failed to remove log directory"
+        warning "Failed to remove old system log directory"
+    fi
+fi
+# Remove user log directory
+if [ -d "${HOME}/Library/Logs/Kanata" ]; then
+    if rm -rf "${HOME}/Library/Logs/Kanata"; then
+        success "Removed user log directory"
+    else
+        warning "Failed to remove user log directory"
     fi
 else
-    debug "Log directory not found"
+    debug "User log directory not found"
 fi
 
 # 7. Note about Karabiner Elements

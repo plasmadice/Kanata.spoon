@@ -27,14 +27,20 @@ if [ -z "$KANATA_BIN" ]; then
     echo "⚠️  Kanata binary not found, but continuing with service stop"
 fi
 
-# Stop Kanata service
+# Use LaunchDaemon (system-level) - required for Virtual HID server socket access
+PLIST_PATH="/Library/LaunchDaemons/com.example.kanata.plist"
+
+# Stop Kanata service (try both LaunchAgent and LaunchDaemon)
 echo "Stopping Kanata service..."
-error_output=$(echo "$cli_password" | sudo -S launchctl bootout system /Library/LaunchDaemons/com.example.kanata.plist 2>&1)
+# Try to stop LaunchAgent first (if it exists)
+launchctl bootout gui/$(id -u)/com.example.kanata 2>/dev/null || true
+# Stop LaunchDaemon
+error_output=$(echo "$cli_password" | sudo -S launchctl bootout system "${PLIST_PATH}" 2>&1)
 exit_code=$?
 
 if [ $exit_code -eq 0 ]; then
   echo "✅ Kanata service stopped successfully!"
-elif echo "$error_output" | grep -q "Could not find service"; then
+elif echo "$error_output" | grep -q "Could not find service\|No such process"; then
   echo "⚠️  Kanata service is not running!"
 else
   echo "❌ Failed to stop Kanata service:"
@@ -44,8 +50,8 @@ fi
 
 # Remove plist file
 echo "Removing Kanata plist file..."
-if [ -f "/Library/LaunchDaemons/com.example.kanata.plist" ]; then
-    if echo "$cli_password" | sudo -S rm -f /Library/LaunchDaemons/com.example.kanata.plist; then
+if [ -f "${PLIST_PATH}" ]; then
+    if echo "$cli_password" | sudo -S rm -f "${PLIST_PATH}"; then
         echo "✅ Kanata plist file removed successfully!"
     else
         echo "❌ Failed to remove Kanata plist file"

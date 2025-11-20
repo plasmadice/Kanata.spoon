@@ -5,6 +5,48 @@ All notable changes to Kanata.spoon will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2025-10-17
+
+### Fixed
+- **Kanata 1.10.0 Compatibility**: Updated for Kanata 1.10.0 compatibility
+  - Changed device listing from `-l` to `--list` flag (with fallback for older versions)
+  - **Fixed device list parsing** for new table format in Kanata 1.10.0
+    - New format includes headers and table structure
+    - Properly extracts device names from `product_key` column
+    - Handles device names with spaces correctly
+    - Maintains backward compatibility with old simple list format
+  - Improved process detection to handle different command formats
+  - Enhanced error handling in restart script with better exit code reporting
+  - Added support for "Service is disabled" error handling
+  - Improved script error logging with stdout and stderr capture
+  - **Fixed Virtual HID server socket access**: Reverted to LaunchDaemon
+    - Kanata 1.10.0 requires root access to `/Library/Application Support/org.pqrs/tmp/rootonly/vhidd_server`
+    - LaunchAgent (user-level) cannot access root-only directories
+    - LaunchDaemon (system-level) runs as root and has required access
+    - Fixes "Permission denied" errors when accessing Virtual HID server socket
+
+### Changed
+- **Service Type**: Reverted to LaunchDaemon (system-level) - required for Virtual HID access
+  - **Critical Fix**: Kanata 1.10.0 requires root access to Virtual HID server socket
+  - Socket location: `/Library/Application Support/org.pqrs/tmp/rootonly/vhidd_server`
+  - LaunchDaemon runs as root and can access the root-only socket directory
+  - Service runs from `/Library/LaunchDaemons/` (system-level)
+  - Logs stored in `/Library/Logs/Kanata/` (system-level)
+  - **Note**: This is required for Kanata 1.10.0+ with DriverKit v6
+  - Scripts handle migration from LaunchAgent back to LaunchDaemon
+
+### Changed
+- **Restart Script**: Enhanced error handling and reporting
+  - Better exit code reporting with detailed error messages
+  - Handles "Service is disabled" case by enabling the service
+  - Improved logging for troubleshooting restart failures
+  - Added wait time between stop and start operations
+
+### Note
+- **Karabiner DriverKit v6**: Kanata 1.10.0 requires Karabiner DriverKit v6
+  - Make sure you have the latest Karabiner Elements installed
+  - The spoon will work with Kanata 1.10.0+ and maintains backward compatibility
+
 ## [1.0.2] - 2025-10-14
 
 ### Added

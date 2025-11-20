@@ -31,6 +31,67 @@ success() {
     echo "✅ $1"
 }
 
+warning() {
+    echo "⚠️  $1"
+}
+
+# Function to check Karabiner DriverKit version
+check_karabiner_driver_version() {
+    local required_version="6.2.0"
+    local driver_version=""
+    
+    # Try to get version from system extensions
+    if command -v systemextensionsctl >/dev/null 2>&1; then
+        local ext_info=$(systemextensionsctl list | grep -i "Karabiner-DriverKit-VirtualHIDDevice" | head -1)
+        if [ -n "$ext_info" ]; then
+            # Extract version from output like: (1.8.0/1.8.0) or (6.6.0/6.6.0)
+            driver_version=$(echo "$ext_info" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+/[0-9]+\.[0-9]+\.[0-9]+\)' | head -1 | cut -d'/' -f2 | tr -d ')')
+        fi
+    fi
+    
+    # If not found, try to get from Info.plist
+    if [ -z "$driver_version" ]; then
+        local plist_path=$(find "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice" -name "Info.plist" 2>/dev/null | head -1)
+        if [ -n "$plist_path" ]; then
+            driver_version=$(defaults read "$plist_path" CFBundleShortVersionString 2>/dev/null || echo "")
+        fi
+    fi
+    
+    if [ -z "$driver_version" ]; then
+        warning "Could not determine Karabiner DriverKit version"
+        warning "Kanata 1.10.0 requires DriverKit v6.2.0 or newer"
+        warning "Please update Karabiner Elements to the latest version"
+        return 1
+    fi
+    
+    echo "Found Karabiner DriverKit version: $driver_version"
+    
+    # Compare versions (simple numeric comparison)
+    local required_major=$(echo "$required_version" | cut -d'.' -f1)
+    local required_minor=$(echo "$required_version" | cut -d'.' -f2)
+    local driver_major=$(echo "$driver_version" | cut -d'.' -f1)
+    local driver_minor=$(echo "$driver_version" | cut -d'.' -f2)
+    
+    if [ "$driver_major" -lt "$required_major" ] || \
+       ([ "$driver_major" -eq "$required_major" ] && [ "$driver_minor" -lt "$(echo $required_version | cut -d'.' -f2)" ]); then
+        error_exit "Karabiner DriverKit version $driver_version is too old!"
+        echo ""
+        echo "Kanata 1.10.0 requires Karabiner DriverKit v6.2.0 or newer"
+        echo "Your version: $driver_version"
+        echo "Required version: $required_version or newer"
+        echo ""
+        echo "Please update Karabiner Elements:"
+        echo "1. Open Karabiner Elements"
+        echo "2. Go to the 'Driver' tab"
+        echo "3. Click 'Update Driver' if available"
+        echo "4. Or download the latest version from: https://karabiner-elements.pqrs.org/"
+        return 1
+    fi
+    
+    success "Karabiner DriverKit version is compatible (v$driver_version >= v$required_version)"
+    return 0
+}
+
 # Retrieve password from keychain
 debug "Starting password retrieval from keychain"
 pw_name="supa" # name of the password in the keychain
@@ -49,6 +110,8 @@ debug "Password retrieved successfully"
 KANATA_CONFIG="${HOME}/.config/kanata/kanata.kbd"
 KANATA_PORT=10000
 PLIST_DIR="/Library/LaunchDaemons"
+PLIST_PATH="${PLIST_DIR}/com.example.kanata.plist"
+LOG_DIR="/Library/Logs/Kanata"
 ###################################
 
 # 1. Check if Karabiner Elements is installed
@@ -58,6 +121,9 @@ if [ ! -d "/Applications/Karabiner-Elements.app" ]; then
     echo "Please install Karabiner Elements first from:"
     echo "https://karabiner-elements.pqrs.org/"
     echo
+    echo "⚠️  IMPORTANT: Kanata 1.10.0+ requires Karabiner DriverKit v6"
+    echo "   Make sure you have the latest version of Karabiner Elements installed"
+    echo
     echo "After installation, make sure to:"
     echo "1. Enable all required permissions in System Settings"
     echo "2. Quit Karabiner Elements app AND the menu bar item"
@@ -65,6 +131,12 @@ if [ ! -d "/Applications/Karabiner-Elements.app" ]; then
     exit 1
 fi
 success "Karabiner Elements found"
+
+# 1.5. Check Karabiner DriverKit version
+debug "Checking Karabiner DriverKit version"
+if ! check_karabiner_driver_version; then
+    exit 1
+fi
 
 # 2. Note about Karabiner
 debug "Reminding user about Karabiner requirements"
@@ -119,21 +191,24 @@ else
 fi
 debug "Using Kanata binary at: $KANATA_BIN"
 
-# 4. Create log directory
+# 4. Create log directory (system-level, requires sudo)
 debug "Creating log directory"
-if ! echo "$cli_password" | sudo -S mkdir -p /Library/Logs/Kanata; then
+if ! echo "$cli_password" | sudo -S mkdir -p "${LOG_DIR}"; then
     error_exit "Failed to create log directory"
 fi
-if ! echo "$cli_password" | sudo -S chown root:wheel /Library/Logs/Kanata; then
+if ! echo "$cli_password" | sudo -S chown root:wheel "${LOG_DIR}"; then
     error_exit "Failed to set ownership for log directory"
 fi
-success "Log directory created and configured"
+success "Log directory created"
 
-# 5. Write Kanata plist file
+# 5. Write Kanata plist file (system-level, requires sudo)
+# Note: LaunchDaemon is required because Kanata 1.10.0 needs root access
+# to the Virtual HID server socket at /Library/Application Support/org.pqrs/tmp/rootonly/vhidd_server
 debug "Creating Kanata plist file"
 debug "Config at: ${KANATA_CONFIG}"
 debug "Binary at: ${KANATA_BIN}"
-if ! echo "$cli_password" | sudo -S tee "${PLIST_DIR}/com.example.kanata.plist" >/dev/null <<EOF
+debug "Using LaunchDaemon (system-level) - required for Virtual HID server socket access"
+if ! echo "$cli_password" | sudo -S tee "${PLIST_PATH}" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -148,9 +223,16 @@ if ! echo "$cli_password" | sudo -S tee "${PLIST_DIR}/com.example.kanata.plist" 
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key>
-  <string>/Library/Logs/Kanata/kanata.out.log</string>
+  <string>${LOG_DIR}/kanata.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Library/Logs/Kanata/kanata.err.log</string>
+  <string>${LOG_DIR}/kanata.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>${HOME}</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
 </dict></plist>
 EOF
 then
@@ -158,28 +240,30 @@ then
 fi
 success "Kanata plist file created"
 
-
-if ! echo "$cli_password" | sudo -S chown root:wheel "${PLIST_DIR}/com.example.kanata.plist"; then
+# Set ownership and permissions (system-level, requires sudo)
+if ! echo "$cli_password" | sudo -S chown root:wheel "${PLIST_PATH}"; then
     error_exit "Failed to set ownership for Kanata plist"
 fi
-
-if ! echo "$cli_password" | sudo -S chmod 644 "${PLIST_DIR}/com.example.kanata.plist"; then
+if ! echo "$cli_password" | sudo -S chmod 644 "${PLIST_PATH}"; then
     error_exit "Failed to set permissions for Kanata plist"
 fi
-
 success "Kanata plist permissions set"
 
-# 6. Stop existing services
+# 6. Stop existing services (try both old LaunchAgent and LaunchDaemon)
 debug "Stopping existing services"
-echo "$cli_password" | sudo -S launchctl bootout system "${PLIST_DIR}/com.example.kanata.plist" 2>/dev/null || debug "Kanata service not running or already stopped"
+# Try to stop old LaunchAgent (if it exists)
+launchctl bootout gui/$(id -u)/com.example.kanata 2>/dev/null || debug "LaunchAgent not running"
+# Stop LaunchDaemon
+echo "$cli_password" | sudo -S launchctl bootout system "${PLIST_PATH}" 2>/dev/null || debug "LaunchDaemon not running"
 success "Existing services stopped"
 
 # 7. Start services
 debug "Starting services"
 
-debug "Starting Kanata service"
-debug "launchctl bootstrap system ${PLIST_DIR}/com.example.kanata.plist"
-if ! echo "$cli_password" | sudo -S launchctl bootstrap system "${PLIST_DIR}/com.example.kanata.plist"; then
+debug "Starting Kanata service (LaunchDaemon - system-level)"
+debug "Note: LaunchDaemon is required for Virtual HID server socket access"
+debug "launchctl bootstrap system ${PLIST_PATH}"
+if ! echo "$cli_password" | sudo -S launchctl bootstrap system "${PLIST_PATH}"; then
     error_exit "Failed to bootstrap Kanata service"
 fi
 if ! echo "$cli_password" | sudo -S launchctl enable system/com.example.kanata; then

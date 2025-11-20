@@ -12,7 +12,7 @@ obj.__index = obj
 
 -- Metadata
 obj.name = "Kanata"
-obj.version = "1.0.2"
+obj.version = "1.0.3"
 obj.author = "plasmadice"
 obj.homepage = "https://github.com/plasmadice/Kanata.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -394,8 +394,25 @@ end
 
 function obj:isKanataServiceRunningProcessBased()
   -- Always use process-based detection (for autostart checks)
-  local psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*" .. (self.port or "10000") .. "'")
-  return psOutput and psOutput ~= ""
+  -- Check for Kanata process with port flag (if port is configured)
+  local psOutput
+  if self.port then
+    psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*" .. self.port .. "'")
+  else
+    -- Check for any Kanata process if no port is configured
+    psOutput = hs.execute("ps aux | grep -E '[k]anata'")
+  end
+  
+  if psOutput and psOutput ~= "" then
+    -- Filter out grep process itself and check for actual kanata process
+    for line in psOutput:gmatch("[^\r\n]+") do
+      if not line:match("grep") and line:match("kanata") then
+        return true
+      end
+    end
+  end
+  
+  return false
 end
 
 function obj:checkKanataHealth()
@@ -527,18 +544,86 @@ function obj:getKanataDeviceList()
     return {}
   end
   
-  local output = hs.execute(kanataCmd .. " -l 2>/dev/null")
-  if not output then
+  -- Use --list flag (Kanata 1.10.0+), fallback to -l for older versions
+  local output = hs.execute(kanataCmd .. " --list 2>/dev/null")
+  local isNewFormat = false
+  
+  if not output or output == "" then
+    -- Fallback to -l for older Kanata versions
+    output = hs.execute(kanataCmd .. " -l 2>/dev/null")
+  else
+    -- Check if this is the new table format (Kanata 1.10.0+)
+    if output:match("Available keyboard devices") or output:match("product_key") then
+      isNewFormat = true
+    end
+  end
+  
+  if not output or output == "" then
     return {}
   end
   
   local devices = {}
-  for line in output:gmatch("[^\r\n]+") do
-    line = line:match("^%s*(.-)%s*$")  -- trim whitespace
-    if line ~= "" then
-      devices[line] = true
+  
+  if isNewFormat then
+    -- Parse new table format (Kanata 1.10.0+)
+    -- Skip header lines and parse device names from table rows
+    local inTable = false
+    local headerSkipped = false
+    
+    for line in output:gmatch("[^\r\n]+") do
+      line = line:match("^%s*(.-)%s*$")  -- trim whitespace
+      
+      -- Skip empty lines and section headers
+      if line == "" or line:match("^=+$") or line:match("Available keyboard devices") then
+        goto continue
+      end
+      
+      -- Skip the column header line
+      if line:match("hash%s+vendor_id%s+product_id%s+product_key") then
+        headerSkipped = true
+        inTable = true
+        goto continue
+      end
+      
+      -- Skip the separator line (dashes)
+      if line:match("^%-+$") then
+        goto continue
+      end
+      
+      -- If we're in the table section, parse device names
+      if inTable and headerSkipped then
+        -- Extract device name from the last column (product_key)
+        -- Format: hash vendor_id product_id device_name
+        -- Lines with device data start with 0x (hex hash)
+        if line:match("^0x") then
+          -- Split by whitespace and take everything after the third field
+          -- Pattern: 0xHASH vendor_id product_id device_name...
+          local parts = {}
+          for part in line:gmatch("%S+") do
+            table.insert(parts, part)
+          end
+          -- Device name is everything from the 4th field onwards
+          if #parts >= 4 then
+            local deviceName = table.concat(parts, " ", 4)
+            if deviceName and deviceName ~= "" then
+              devices[deviceName] = true
+            end
+          end
+        end
+      end
+      
+      ::continue::
+    end
+  else
+    -- Parse old simple list format (pre-1.10.0)
+    for line in output:gmatch("[^\r\n]+") do
+      line = line:match("^%s*(.-)%s*$")  -- trim whitespace
+      if line ~= "" then
+        devices[line] = true
+      end
     end
   end
+  
   return devices
 end
 
@@ -802,11 +887,26 @@ function obj:restartKanata(newDevices, suppressLog)
   end
   
   local task = hs.task.new(scriptPath, function(exitCode, stdOut, stdErr)
-    if exitCode ~= 0 then
+    if exitCode == 0 then
+      self.logger.i("Kanata restart script completed successfully")
+    else
       self.logger.e("Restart script failed with exit code " .. tostring(exitCode))
+      if stdOut and stdOut ~= "" then
+        self.logger.e("Script output: " .. stdOut)
+      end
+      if stdErr and stdErr ~= "" then
+        self.logger.e("Script error: " .. stdErr)
+      end
+      -- Show alert to user
+      hs.alert.show("❌ Kanata restart failed!\nCheck console for details", 5)
     end
   end, args)
-  task:start()
+  
+  local success = task:start()
+  if not success then
+    self.logger.e("Failed to execute restart script: " .. scriptPath)
+    hs.alert.show("❌ Failed to execute restart script", 3)
+  end
 end
 
 function obj:setupConfigWatcher()
