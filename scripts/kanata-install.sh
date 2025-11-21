@@ -39,21 +39,40 @@ warning() {
 check_karabiner_driver_version() {
     local required_version="6.2.0"
     local driver_version=""
+    local version_source=""
     
-    # Try to get version from system extensions
-    if command -v systemextensionsctl >/dev/null 2>&1; then
-        local ext_info=$(systemextensionsctl list | grep -i "Karabiner-DriverKit-VirtualHIDDevice" | head -1)
-        if [ -n "$ext_info" ]; then
-            # Extract version from output like: (1.8.0/1.8.0) or (6.6.0/6.6.0)
-            driver_version=$(echo "$ext_info" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+/[0-9]+\.[0-9]+\.[0-9]+\)' | head -1 | cut -d'/' -f2 | tr -d ')')
+    # Prioritize Info.plist (more reliable, especially for beta versions)
+    # Check the VirtualHIDDevice daemon Info.plist first
+    local plist_path=$(find "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice" -name "Info.plist" -path "*/Karabiner-VirtualHIDDevice-Daemon.app/*" 2>/dev/null | head -1)
+    if [ -n "$plist_path" ]; then
+        driver_version=$(defaults read "$plist_path" CFBundleShortVersionString 2>/dev/null || echo "")
+        if [ -n "$driver_version" ]; then
+            version_source="Info.plist (VirtualHIDDevice-Daemon)"
         fi
     fi
     
-    # If not found, try to get from Info.plist
+    # Fallback: try any Info.plist in the DriverKit directory
     if [ -z "$driver_version" ]; then
-        local plist_path=$(find "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice" -name "Info.plist" 2>/dev/null | head -1)
+        plist_path=$(find "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice" -name "Info.plist" 2>/dev/null | head -1)
         if [ -n "$plist_path" ]; then
             driver_version=$(defaults read "$plist_path" CFBundleShortVersionString 2>/dev/null || echo "")
+            if [ -n "$driver_version" ]; then
+                version_source="Info.plist"
+            fi
+        fi
+    fi
+    
+    # Last resort: try to get version from system extensions (less reliable)
+    if [ -z "$driver_version" ] && command -v systemextensionsctl >/dev/null 2>&1; then
+        local ext_info=$(systemextensionsctl list | grep -i "Karabiner-DriverKit-VirtualHIDDevice" | head -1)
+        if [ -n "$ext_info" ]; then
+            # Extract version from output like: (1.8.0/1.8.0) or (6.6.0/6.6.0)
+            # Note: systemextensionsctl may show outdated version info
+            driver_version=$(echo "$ext_info" | grep -oE '\([0-9]+\.[0-9]+\.[0-9]+/[0-9]+\.[0-9]+\.[0-9]+\)' | head -1 | cut -d'/' -f2 | tr -d ')')
+            if [ -n "$driver_version" ]; then
+                version_source="systemextensionsctl"
+                debug "Warning: systemextensionsctl may show outdated version info"
+            fi
         fi
     fi
     
@@ -62,6 +81,23 @@ check_karabiner_driver_version() {
         warning "Kanata 1.10.0 requires DriverKit v6.2.0 or newer"
         warning "Please update Karabiner Elements to the latest version"
         return 1
+    fi
+    
+    debug "Found Karabiner DriverKit version: $driver_version (from $version_source)"
+    
+    # If version came from systemextensionsctl and seems too old, double-check Info.plist
+    # (systemextensionsctl often shows outdated version info, especially with beta releases)
+    if [ "$version_source" = "systemextensionsctl" ]; then
+        debug "Version from systemextensionsctl may be outdated, checking Info.plist..."
+        local actual_plist=$(find "/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice" -name "Info.plist" -path "*/Karabiner-VirtualHIDDevice-Daemon.app/*" 2>/dev/null | head -1)
+        if [ -n "$actual_plist" ]; then
+            local actual_version=$(defaults read "$actual_plist" CFBundleShortVersionString 2>/dev/null || echo "")
+            if [ -n "$actual_version" ] && [ "$actual_version" != "$driver_version" ]; then
+                debug "Found newer version in Info.plist: $actual_version (vs $driver_version from systemextensionsctl)"
+                driver_version="$actual_version"
+                version_source="Info.plist (corrected)"
+            fi
+        fi
     fi
     
     echo "Found Karabiner DriverKit version: $driver_version"
@@ -74,7 +110,7 @@ check_karabiner_driver_version() {
     
     if [ "$driver_major" -lt "$required_major" ] || \
        ([ "$driver_major" -eq "$required_major" ] && [ "$driver_minor" -lt "$(echo $required_version | cut -d'.' -f2)" ]); then
-        error_exit "Karabiner DriverKit version $driver_version is too old!"
+        echo "❌ ERROR: Karabiner DriverKit version $driver_version is too old!" >&2
         echo ""
         echo "Kanata 1.10.0 requires Karabiner DriverKit v6.2.0 or newer"
         echo "Your version: $driver_version"
