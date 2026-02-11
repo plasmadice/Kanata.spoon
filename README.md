@@ -11,7 +11,8 @@ Hammerspoon Spoon for monitoring and managing [Kanata](https://github.com/jtroo/
 - 🛌 Sleep/wake handling
 - 🔗 URL scheme support
 
-<img width="223" height="363" alt="image" src="https://github.com/user-attachments/assets/3e9122a6-2e4b-4180-9d99-0ade1ec0851d" />
+<img width="926" height="904" alt="CleanShot 2026-02-10 at 21 55 24@2x" src="https://github.com/user-attachments/assets/0596881a-dd0d-4656-bce1-e0d683df4bf7" />
+
 
 ## Quick Start
 
