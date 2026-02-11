@@ -12,7 +12,7 @@ obj.__index = obj
 
 -- Metadata
 obj.name = "Kanata"
-obj.version = "1.0.3"
+obj.version = "1.0.4"
 obj.author = "plasmadice"
 obj.homepage = "https://github.com/plasmadice/Kanata.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -61,6 +61,11 @@ obj.startMonitoringOnLoad = false
 --- Requires kanataConfigPath and restartScript to be set
 --- If enabled but requirements missing, will show alert and open console
 obj.autoStartKanata = false
+
+--- Kanata.checkForUpdates
+--- Variable
+--- Whether to check for Kanata binary updates on startup (default: false)
+obj.checkForUpdates = false
 
 --- Kanata.port
 --- Variable
@@ -890,15 +895,22 @@ function obj:restartKanata(newDevices, suppressLog)
     if exitCode == 0 then
       self.logger.i("Kanata restart script completed successfully")
     else
-      self.logger.e("Restart script failed with exit code " .. tostring(exitCode))
+      self.logger.w("Restart script exited with code " .. tostring(exitCode) .. " (may still succeed)")
       if stdOut and stdOut ~= "" then
         self.logger.e("Script output: " .. stdOut)
       end
       if stdErr and stdErr ~= "" then
         self.logger.e("Script error: " .. stdErr)
       end
-      -- Show alert to user
-      hs.alert.show("❌ Kanata restart failed!\nCheck console for details", 5)
+      -- Check if Kanata is actually running despite exit code
+      hs.timer.doAfter(2, function()
+        if self:isKanataServiceRunning() then
+          self.logger.i("Kanata is running (restart may have succeeded)")
+        else
+          hs.alert.show("⚠️ Kanata may need attention", 3)
+        end
+        self:updateMenuBar()
+      end)
     end
   end, args)
   
@@ -1128,11 +1140,63 @@ function obj:updateMenuBar()
     fn = function() self:quitHammerspoon() end
   })
   
+  -- Settings submenu
+  table.insert(menu, { title = "-" })
+  local settingsMenu = {
+    { title = "Start Monitoring on Load: " .. (self.startMonitoringOnLoad and "✓" or "✗"),
+      fn = function()
+        self.startMonitoringOnLoad = not self.startMonitoringOnLoad
+        self:updateMenuBar()
+        hs.alert.show("startMonitoringOnLoad: " .. tostring(self.startMonitoringOnLoad))
+      end
+    },
+    { title = "Auto Start Kanata: " .. (self.autoStartKanata and "✓" or "✗"),
+      fn = function()
+        self.autoStartKanata = not self.autoStartKanata
+        self:updateMenuBar()
+        hs.alert.show("autoStartKanata: " .. tostring(self.autoStartKanata))
+      end
+    },
+    { title = "Use Raycast: " .. (self.useRaycast and "✓" or "✗"),
+      fn = function()
+        self.useRaycast = not self.useRaycast
+        self:updateMenuBar()
+        hs.alert.show("useRaycast: " .. tostring(self.useRaycast))
+      end
+    },
+    { title = "Check for Updates: " .. (self.checkForUpdates and "✓" or "✗"),
+      fn = function()
+        self.checkForUpdates = not self.checkForUpdates
+        self:updateMenuBar()
+        hs.alert.show("checkForUpdates: " .. tostring(self.checkForUpdates))
+      end
+    },
+    { title = "-" },
+    { title = "Check kanata -l every: " .. self.checkInterval .. "s",
+      fn = function()
+        local btn, val = hs.dialog.textPrompt("Check Interval", "Seconds between device checks:", tostring(self.checkInterval), "OK", "Cancel")
+        if btn == "OK" then
+          local num = tonumber(val)
+          if num and num > 0 then
+            self.checkInterval = num
+            hs.alert.show("Check interval set to " .. num .. "s")
+            -- Restart monitoring to apply new interval
+            if self.isMonitoring then
+              self:stopMonitoring(true)
+              self:startMonitoring(true)
+            end
+          end
+        end
+      end
+    },
+  }
+  table.insert(menu, { title = "⚙️ Settings", menu = settingsMenu })
+  
   -- Info section
   table.insert(menu, { title = "-" })
   table.insert(menu, {
     title = "Kanata.spoon v" .. self.version,
-    disabled = true
+    fn = function() hs.urlevent.openURL(self.homepage) end
   })
   
   self.menuBar:setMenu(menu)
