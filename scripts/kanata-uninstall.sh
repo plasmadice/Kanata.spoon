@@ -12,174 +12,76 @@
 # @raycast.author plasmadice
 # @raycast.authorURL https://github.com/plasmadice
 
-# Cleanup script that uninstalls Kanata and removes all Karabiner services and plist files
-
 set -euo pipefail
 
-# Enhanced error handling and debugging
-debug() {
-    echo "🔍 DEBUG: $1" >&2
-}
+success() { echo "✅ $1"; }
+warning() { echo "⚠️  $1"; }
 
-error_exit() {
-    echo "❌ ERROR: $1" >&2
-    exit 1
-}
+# Resolve brew regardless of which Homebrew is active in PATH
+BREW=""
+for candidate in "$(command -v brew 2>/dev/null)" /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    [ -x "$candidate" ] && BREW="$candidate" && break
+done
 
-success() {
-    echo "✅ $1"
-}
-
-warning() {
-    echo "⚠️  $1"
-}
-
-# Retrieve password from keychain
-debug "Starting password retrieval from keychain"
-pw_name="supa" # name of the password in the keychain
-pw_account=$(id -un) # current username e.g. "viper"
-debug "Looking for password with name: $pw_name, account: $pw_account"
-
+# Retrieve sudo password from keychain
+pw_name="supa"
+pw_account=$(id -un)
 if ! cli_password=$(security find-generic-password -w -s "$pw_name" -a "$pw_account" 2>&1); then
-  error_exit "Could not get password (error $?)"
-  echo "Please add your password to keychain with:"
-  echo "security add-generic-password -s 'supa' -a '$(id -un)' -w 'your_password'"
-  exit 1
+    echo "❌ Could not get password from keychain"
+    exit 1
 fi
-debug "Password retrieved successfully"
 
-#### CONFIGURATION ####
-PLIST_DIR="/Library/LaunchDaemons"
-###################################
+echo "🧹 Uninstalling Kanata..."
 
-echo "🧹 Starting cleanup of Kanata and Karabiner services..."
+# 1. Kill any stray kanata processes first (running two instances breaks mouse/keyboard)
+pkill -x kanata 2>/dev/null || true
+sleep 1
 
-# 1. Stop Hammerspoon Kanata monitoring service
-debug "Stopping Hammerspoon Kanata monitoring service"
-if open -g "hammerspoon://kanata?action=stop" 2>/dev/null; then
-    success "Hammerspoon Kanata monitoring service stopped"
+# 2. Stop and unregister the brew service
+if [ -n "$BREW" ] && "$BREW" list kanata >/dev/null 2>&1; then
+    echo "$cli_password" | sudo -S "$BREW" services stop kanata 2>/dev/null || true
+    success "Kanata service stopped"
+    "$BREW" uninstall kanata
+    success "Kanata uninstalled from Homebrew"
 else
-    warning "Failed to stop Hammerspoon monitoring service - it may not be available"
+    warning "Kanata not found in Homebrew — skipping"
 fi
 
-# 2. Stop Kanata service (try both LaunchDaemon and LaunchAgent)
-debug "Stopping Kanata service"
-# Try to stop old LaunchDaemon (if it exists)
-echo "$cli_password" | sudo -S launchctl bootout system /Library/LaunchDaemons/com.example.kanata.plist 2>/dev/null || debug "Old LaunchDaemon not running"
-# Try to stop LaunchAgent
-launchctl bootout gui/$(id -u)/com.example.kanata 2>/dev/null || launchctl unload "${HOME}/Library/LaunchAgents/com.example.kanata.plist" 2>/dev/null || debug "LaunchAgent not running"
-success "Kanata service stopped"
-
-# 3. Remove Kanata plist files (both old and new locations)
-debug "Removing Kanata plist files"
-# Remove old LaunchDaemon plist
-if [ -f "/Library/LaunchDaemons/com.example.kanata.plist" ]; then
-    if echo "$cli_password" | sudo -S rm -f "/Library/LaunchDaemons/com.example.kanata.plist"; then
-        success "Removed old LaunchDaemon plist file"
-    else
-        warning "Failed to remove old LaunchDaemon plist file"
+# 3. Clean up any legacy LaunchDaemon / LaunchAgent plist files from old setup.
+# The old scripts used com.example.kanata; brew services uses homebrew.mxcl.kanata.
+for plist in \
+    "/Library/LaunchDaemons/com.example.kanata.plist" \
+    "/Library/LaunchDaemons/homebrew.mxcl.kanata.plist" \
+    "${HOME}/Library/LaunchAgents/com.example.kanata.plist"
+do
+    if [ -f "$plist" ]; then
+        echo "$cli_password" | sudo -S launchctl bootout system "$plist" 2>/dev/null || \
+            launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || true
+        echo "$cli_password" | sudo -S rm -f "$plist" 2>/dev/null || rm -f "$plist" 2>/dev/null || true
+        success "Removed plist: $plist"
     fi
-fi
-# Remove LaunchAgent plist
-if [ -f "${HOME}/Library/LaunchAgents/com.example.kanata.plist" ]; then
-    if rm -f "${HOME}/Library/LaunchAgents/com.example.kanata.plist"; then
-        success "Removed LaunchAgent plist file"
-    else
-        warning "Failed to remove LaunchAgent plist file"
-    fi
-else
-    debug "LaunchAgent plist file not found, skipping"
-fi
+done
 
-# 4. Kill any running Kanata processes
-debug "Killing any running Kanata processes"
-pkill -f "kanata" 2>/dev/null || debug "No running Kanata processes found"
-
-# 5. Uninstall Kanata via Homebrew
-debug "Uninstalling Kanata via Homebrew"
-if command -v brew >/dev/null 2>&1; then
-    if brew list kanata >/dev/null 2>&1; then
-        debug "Kanata found in Homebrew, uninstalling"
-        if brew uninstall kanata; then
-            success "Kanata uninstalled from Homebrew"
-        else
-            warning "Failed to uninstall Kanata from Homebrew"
-        fi
-    else
-        debug "Kanata not found in Homebrew"
-    fi
-else
-    debug "Homebrew not found, skipping kanata uninstall"
-fi
-
-# 6. Remove log directories (both old and new locations)
-debug "Removing log directories"
-# Remove old system log directory
+# 3. Remove legacy log directory (old LaunchDaemon setup wrote here)
 if [ -d "/Library/Logs/Kanata" ]; then
-    if echo "$cli_password" | sudo -S rm -rf "/Library/Logs/Kanata"; then
-        success "Removed old system log directory"
-    else
-        warning "Failed to remove old system log directory"
-    fi
-fi
-# Remove user log directory
-if [ -d "${HOME}/Library/Logs/Kanata" ]; then
-    if rm -rf "${HOME}/Library/Logs/Kanata"; then
-        success "Removed user log directory"
-    else
-        warning "Failed to remove user log directory"
-    fi
-else
-    debug "User log directory not found"
+    echo "$cli_password" | sudo -S rm -rf "/Library/Logs/Kanata"
+    success "Removed /Library/Logs/Kanata"
 fi
 
-# 7. Note about Karabiner Elements
-echo
-echo "ℹ️  Note: This cleanup only removes Kanata."
-echo "Karabiner Elements is left installed as it may be used for other purposes."
-
-# 8. Clean up any remaining files
-debug "Cleaning up remaining files"
-
-# Remove kanata config directory if empty
+# 4. Keep kanata config (~/.config/kanata) unless it is empty
 if [ -d "${HOME}/.config/kanata" ]; then
     if [ -z "$(ls -A "${HOME}/.config/kanata" 2>/dev/null)" ]; then
-        debug "Removing empty kanata config directory"
         rm -rf "${HOME}/.config/kanata"
-        success "Removed empty kanata config directory"
+        success "Removed empty ~/.config/kanata"
     else
-        debug "Kanata config directory not empty, keeping it"
+        warning "~/.config/kanata has files — leaving it in place"
     fi
 fi
 
-# 9. Final verification
-debug "Performing final verification"
-remaining_services=$(echo "$cli_password" | sudo -S launchctl list | grep -E "kanata" || true)
-if [ -n "$remaining_services" ]; then
-    warning "Some Kanata services may still be running:"
-    echo "$remaining_services"
-else
-    success "No remaining Kanata services found"
-fi
-
-# Check if kanata binary still exists
-if command -v kanata >/dev/null 2>&1; then
-    warning "Kanata binary still found in PATH: $(command -v kanata)"
-else
-    success "Kanata binary not found in PATH"
-fi
-
 echo
-echo "🎉 Cleanup completed!"
+echo "🎉 Done!"
 echo
-echo "Summary of actions taken:"
-echo "✅ Stopped Kanata service"
-echo "✅ Removed Kanata plist file"
-echo "✅ Killed running Kanata processes"
-echo "✅ Uninstalled Kanata from Homebrew"
-echo "✅ Removed log directory"
-echo "✅ Cleaned up remaining files"
-echo
-echo "Note: You may need to manually remove Kanata from:"
-echo "- System Preferences > Security & Privacy > Privacy > Accessibility"
-echo "- System Preferences > Security & Privacy > Privacy > Input Monitoring"
+echo "ℹ️  Karabiner-Elements was left installed (uninstall manually if not needed)."
+echo "ℹ️  You may also remove Kanata from:"
+echo "   System Settings → Privacy & Security → Input Monitoring"
+echo "   System Settings → Privacy & Security → Accessibility"

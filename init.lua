@@ -1,9 +1,10 @@
 --- === Kanata ===
 ---
---- Monitors Kanata keyboard remapper and automatically restarts when new devices are detected
---- Includes optional menu bar controls and script integration
+--- Monitors Kanata keyboard remapper and automatically restarts when new devices are detected.
+--- Kanata is managed as a Homebrew service (sudo brew services start kanata).
+--- Includes optional menu bar controls and Raycast script integration.
 ---
---- Download: https://github.com/yourusername/Kanata.spoon
+--- Download: https://github.com/plasmadice/Kanata.spoon
 --- @author plasmadice
 --- @license MIT
 
@@ -12,7 +13,7 @@ obj.__index = obj
 
 -- Metadata
 obj.name = "Kanata"
-obj.version = "1.0.4"
+obj.version = "1.2.0"
 obj.author = "plasmadice"
 obj.homepage = "https://github.com/plasmadice/Kanata.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -35,7 +36,8 @@ obj.kanataConfigPath = nil
 
 --- Kanata.restartScript
 --- Variable
---- Path to your kanata-restart script (required for autostart)
+--- Path to kanata-restart.sh (auto-discovered from the spoon's scripts/ folder if not set)
+--- The script should run: sudo brew services restart kanata
 obj.restartScript = nil
 
 --- Kanata.useRaycast
@@ -57,15 +59,10 @@ obj.startMonitoringOnLoad = false
 
 --- Kanata.autoStartKanata
 --- Variable
---- Whether to automatically start Kanata service at system boot (default: false)
---- Requires kanataConfigPath and restartScript to be set
---- If enabled but requirements missing, will show alert and open console
+--- Whether to start Kanata via the restart script if it is not already running when Hammerspoon loads (default: false)
+--- Acts as a safety net — brew services normally handles boot-time autostart on its own
+--- If enabled but kanata binary or restart script is missing, shows an alert and opens Console
 obj.autoStartKanata = false
-
---- Kanata.checkForUpdates
---- Variable
---- Whether to check for Kanata binary updates on startup (default: false)
-obj.checkForUpdates = false
 
 --- Kanata.port
 --- Variable
@@ -73,6 +70,20 @@ obj.checkForUpdates = false
 --- When provided, enables health check via JSON API to determine if Kanata is running and healthy
 --- If not set or nil, falls back to process-based detection
 obj.port = nil
+
+--- Kanata.reloadOnConfigChange
+--- Variable
+--- Whether to automatically validate and restart Kanata when kanata.kbd is saved (default: false)
+--- When false, config file changes are ignored (device lists are still parsed on spoon load)
+--- When true, requires monitoring to be active and kanataConfigPath to be set
+obj.reloadOnConfigChange = false
+
+--- Kanata.restartCooldown
+--- Variable
+--- Seconds to block further auto-restarts after one has been triggered (default: 15)
+--- Prevents a restart loop: when kanata restarts it briefly disconnects, which can make
+--- the device-check poll see "new" devices and fire another restart immediately.
+obj.restartCooldown = 15
 
 -- Internal state
 obj.isMonitoring = false
@@ -84,11 +95,14 @@ obj.useIncludeList = false
 obj.menuBar = nil
 obj.configWatcher = nil
 obj.configChangeTimer = nil
-obj.kanataBinaryPath = nil  -- Stores the actual path to kanata binary
-obj.restartAnimationTimer = nil  -- Timer for restart animation
-obj.restartAnimationStep = 0  -- Animation step counter
-obj.originalIcon = nil  -- Store original menu bar icon
-obj.recentlyRemovedDevices = {}  -- Track recently removed devices for reconnection detection
+obj.kanataBinaryPath = nil
+obj.restartAnimationTimer = nil
+obj.restartAnimationStopTimer = nil
+obj.restartAnimationStep = 0
+obj.originalIcon = nil
+obj.recentlyRemovedDevices = {}
+obj.spoonPath = nil  -- Absolute path to the spoon directory, set in init()
+obj.lastRestartTime = 0
 
 --- Kanata:init()
 --- Method
@@ -97,14 +111,26 @@ obj.recentlyRemovedDevices = {}  -- Track recently removed devices for reconnect
 --- Returns:
 ---  * The Kanata object
 function obj:init()
-  -- Set default config path if not specified
+  -- Resolve the spoon's own directory so scripts can be found relative to it
+  self.spoonPath = hs.configdir .. "/Spoons/" .. self.name .. ".spoon"
+
+  -- Auto-discover restart script from the spoon's scripts/ folder if not set
+  if not self.restartScript then
+    local candidate = self.spoonPath .. "/scripts/kanata-restart.sh"
+    if self:fileExists(candidate) then
+      self.restartScript = candidate
+      self.logger.i("Auto-discovered restart script: " .. candidate)
+    end
+  end
+
+  -- Auto-discover kanata config path if not set
   if not self.kanataConfigPath then
     local defaultPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
     if self:fileExists(defaultPath) then
       self.kanataConfigPath = defaultPath
     end
   end
-  
+
   return self
 end
 
@@ -188,6 +214,10 @@ function obj:stop()
   if self.restartAnimationTimer then
     self.restartAnimationTimer:stop()
     self.restartAnimationTimer = nil
+  end
+  if self.restartAnimationStopTimer then
+    self.restartAnimationStopTimer:stop()
+    self.restartAnimationStopTimer = nil
   end
   
   -- Remove menu bar
@@ -460,9 +490,8 @@ function obj:startKanataService()
     return false
   end
   
-  self.logger.i("Starting Kanata service via script: " .. self.restartScript)
-  
-  -- Run restart script
+  self.logger.i("Starting Kanata via restart script: " .. self.restartScript)
+
   local task = hs.task.new(self.restartScript, function(exitCode, stdOut, stdErr)
     if exitCode == 0 then
       self.logger.i("Kanata service started successfully")
@@ -485,26 +514,18 @@ end
 
 function obj:handleAutoStart()
   self.logger.i("Checking autostart configuration...")
-  
-  -- Validate requirements
+
+  -- Validate requirements (kanataConfigPath is optional — only needed for device filtering)
   local missingRequirements = {}
-  
-  if not self.kanataConfigPath or self.kanataConfigPath == "" then
-    table.insert(missingRequirements, "kanataConfigPath not set")
-  elseif not self:fileExists(self.kanataConfigPath) then
-    table.insert(missingRequirements, "kanataConfigPath file not found: " .. self.kanataConfigPath)
-  end
-  
-  -- Check for restart script
+
   if not self.restartScript then
-    table.insert(missingRequirements, "restartScript not configured")
+    table.insert(missingRequirements, "restartScript not configured and could not be auto-discovered")
   elseif not self:fileExists(self.restartScript) then
     table.insert(missingRequirements, "restartScript not found: " .. self.restartScript)
   end
-  
-  -- Check if Kanata binary is available
+
   if not self:isKanataAvailable() then
-    table.insert(missingRequirements, "Kanata binary not found in PATH")
+    table.insert(missingRequirements, "Kanata binary not found (is 'brew install kanata' done?)")
   end
   
   -- If requirements are missing, show alert and open console
@@ -818,11 +839,20 @@ function obj:showRestartAnimation()
   if not self.menuBar then
     return
   end
-  
-  -- Store original icon
-  self.originalIcon = self.menuBar:title()
-  
-  -- Start animation with refresh icon
+
+  -- Cancel any in-progress animation before starting a new one.
+  -- Without this, rapid successive calls leak the doEvery timer and
+  -- the anonymous doAfter cleanup races with the new animation.
+  if self.restartAnimationTimer then
+    self.restartAnimationTimer:stop()
+    self.restartAnimationTimer = nil
+  end
+  if self.restartAnimationStopTimer then
+    self.restartAnimationStopTimer:stop()
+    self.restartAnimationStopTimer = nil
+  end
+
+  self.restartAnimationStep = 0
   self.restartAnimationTimer = hs.timer.doEvery(0.3, function()
     if self.restartAnimationStep == 0 then
       self.menuBar:setTitle("🔄")
@@ -835,22 +865,32 @@ function obj:showRestartAnimation()
       self.restartAnimationStep = 0
     end
   end)
-  
-  self.restartAnimationStep = 0
-  
-  -- Stop animation after 3 seconds
-  hs.timer.doAfter(3, function()
+
+  -- Track the stop-timer so it can be cancelled if a new animation starts
+  self.restartAnimationStopTimer = hs.timer.doAfter(3, function()
     if self.restartAnimationTimer then
       self.restartAnimationTimer:stop()
       self.restartAnimationTimer = nil
     end
+    self.restartAnimationStopTimer = nil
     self:updateMenuBar()
   end)
 end
 
 function obj:restartKanata(newDevices, suppressLog)
   self.logger.i("restartKanata called with devices: " .. table.concat(newDevices, ", "))
-  
+
+  -- Cooldown guard: kanata briefly disconnects during a restart, which makes the
+  -- next device-check poll see "new" devices and fire another restart immediately.
+  -- Block re-entry for restartCooldown seconds after the last restart.
+  local now = os.time()
+  if now - self.lastRestartTime < self.restartCooldown then
+    local remaining = self.restartCooldown - (now - self.lastRestartTime)
+    self.logger.i("Restart cooldown active (" .. remaining .. "s remaining) — skipping")
+    return
+  end
+  self.lastRestartTime = now
+
   if not self:isKanataAvailable() then
     self.logger.e("Kanata not available, stopping monitoring service")
     self:stopMonitoring()
@@ -944,6 +984,12 @@ function obj:setupConfigWatcher()
         
         -- Set new timer to process after 500ms of no changes (debounce)
         self.configChangeTimer = hs.timer.doAfter(0.5, function()
+          if not self.reloadOnConfigChange then
+            self.logger.d("Kanata config file changed (reloadOnConfigChange disabled - no action taken)")
+            self.configChangeTimer = nil
+            return
+          end
+
           -- Only process if monitoring is enabled
           if self.isMonitoring then
             self.logger.i("Kanata config file changed - validating configuration")
@@ -964,9 +1010,8 @@ function obj:setupConfigWatcher()
             local checkOutput, checkStatus = hs.execute(checkCmd)
             
             if checkStatus then
-              -- Config is valid, proceed with restart
               self.logger.i("Config validation passed - restarting Kanata")
-              hs.alert.show("Success! Restarting Kanata")
+              hs.alert.show("Config valid — restarting Kanata")
               self:restartKanata({}, true)
             else
               -- Config has errors, show them to user
@@ -985,7 +1030,6 @@ function obj:setupConfigWatcher()
               }):send()
             end
           else
-            -- Monitoring is disabled, just log the change
             self.logger.i("Kanata config file changed (monitoring disabled - no action taken)")
           end
           
@@ -1164,11 +1208,11 @@ function obj:updateMenuBar()
         hs.alert.show("useRaycast: " .. tostring(self.useRaycast))
       end
     },
-    { title = "Check for Updates: " .. (self.checkForUpdates and "✓" or "✗"),
+    { title = "Reload on Config Change: " .. (self.reloadOnConfigChange and "✓" or "✗"),
       fn = function()
-        self.checkForUpdates = not self.checkForUpdates
+        self.reloadOnConfigChange = not self.reloadOnConfigChange
         self:updateMenuBar()
-        hs.alert.show("checkForUpdates: " .. tostring(self.checkForUpdates))
+        hs.alert.show("reloadOnConfigChange: " .. tostring(self.reloadOnConfigChange))
       end
     },
     { title = "-" },
@@ -1239,35 +1283,23 @@ end
 
 function obj:stopService()
   self.logger.i("Stopping Kanata service and monitoring")
-  
-  -- Stop monitoring first
+
   if self.isMonitoring then
-    self:stopMonitoring(true) -- Suppress alert
+    self:stopMonitoring(true)
   end
-  
-  -- Stop Kanata service using Raycast kanata-stop command
+
   if self:isKanataServiceRunning() then
-    if self.useRaycast then
-      self.logger.i("Stopping Kanata via Raycast command")
-      self:openRaycastCommand("kanata-stop")
+    local stopScript = self.spoonPath .. "/scripts/kanata-stop.sh"
+    if self:fileExists(stopScript) then
+      self.logger.i("Stopping Kanata via stop script")
+      hs.execute(string.format('bash "%s" &', stopScript))
     else
-      -- Fallback to local script if Raycast not enabled
-      local spoonPath = hs.spoons.scriptPath() .. "/" .. self.name .. ".spoon"
-      local stopScript = spoonPath .. "/scripts/kanata-stop.sh"
-      
-      if self:fileExists(stopScript) then
-        self.logger.i("Stopping Kanata via local script")
-        hs.execute(string.format('bash "%s" &', stopScript))
-      else
-        self.logger.w("Stop script not found, Kanata may remain running")
-      end
+      self.logger.w("kanata-stop.sh not found at: " .. stopScript)
     end
-    hs.timer.usleep(500000) -- 500ms
+    hs.timer.usleep(500000)
   end
-  
-  -- Update menu to reflect new state
+
   self:updateMenuBar()
-  
   hs.alert.show("✅ Service stopped")
 end
 
@@ -1310,34 +1342,22 @@ end
 
 function obj:quitHammerspoon()
   self.logger.i("Quit Hammerspoon requested")
-  
-  -- Stop monitoring service first
+
   if self.isMonitoring then
-    self:stopMonitoring(true) -- Suppress alert
+    self:stopMonitoring(true)
   end
-  
-  -- Stop Kanata service if it's running
+
   if self:isKanataServiceRunning() then
-    if self.useRaycast then
-      self.logger.i("Stopping Kanata via Raycast command")
-      self:openRaycastCommand("kanata-stop")
+    local stopScript = self.spoonPath .. "/scripts/kanata-stop.sh"
+    if self:fileExists(stopScript) then
+      self.logger.i("Stopping Kanata via stop script")
+      hs.execute(string.format('bash "%s" &', stopScript))
     else
-      -- Fallback to local script
-      local spoonPath = hs.spoons.scriptPath() .. "/" .. self.name .. ".spoon"
-      local stopScript = spoonPath .. "/scripts/kanata-stop.sh"
-      
-      if self:fileExists(stopScript) then
-        self.logger.i("Stopping Kanata via local script")
-        hs.execute(string.format('bash "%s" &', stopScript))
-      else
-        self.logger.w("Stop script not found, Kanata may remain running")
-      end
+      self.logger.w("kanata-stop.sh not found — Kanata service will keep running")
     end
-    -- Give it a moment to start stopping
-    hs.timer.usleep(500000) -- 500ms
+    hs.timer.usleep(500000)
   end
-  
-  -- Now quit Hammerspoon
+
   self.logger.i("Quitting Hammerspoon...")
   hs.osascript.applescript('tell application "Hammerspoon" to quit')
 end

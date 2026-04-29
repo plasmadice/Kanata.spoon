@@ -5,6 +5,46 @@ All notable changes to Kanata.spoon will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-04-29
+
+### Added
+- **`reloadOnConfigChange` option** (default: `false`): auto-validate and restart kanata when `kanata.kbd` is saved. Previously this was always on; it is now opt-in. Toggle in ⚙️ Settings menu or set `spoon.Kanata.reloadOnConfigChange = true` in `init.lua`.
+- **`restartCooldown` option** (default: 15 s): blocks additional auto-restarts within N seconds of the last one. Prevents a restart loop caused by kanata briefly disconnecting during a `brew services restart`, which made the next device-check poll see "new" devices and fire another restart.
+- **`kanata-legacy-cleanup.sh`**: one-time migration script that removes artifacts from the old custom-LaunchDaemon installation (plist files, log directory, non-Homebrew binaries). Requires interactive confirmation; never touches `~/.config/kanata/` or the current Homebrew install.
+
+### Fixed
+- **Restart animation stuck in loop**: calling `showRestartAnimation` while one was already running leaked the `doEvery` timer (overwritten without being stopped) and left the anonymous `doAfter` cleanup timer uncancellable. Both timers are now tracked and explicitly stopped before a new animation starts.
+- **Mouse commands silently fail when running as a service**: documented that `Accessibility` permission (System Settings → Privacy & Security → Accessibility) must be granted to `/opt/homebrew/opt/kanata/bin/kanata`. Without it, `movemouse-*` and scroll actions work in a terminal `sudo` session (which inherits Terminal.app's TCC grants) but silently do nothing when kanata runs as a headless LaunchDaemon.
+
+## [1.1.0] - 2026-04-21
+
+### Changed
+- **Homebrew service workflow**: Kanata is now managed via `sudo brew services start kanata` instead of a custom LaunchDaemon. All four scripts (`kanata-install.sh`, `kanata-restart.sh`, `kanata-stop.sh`, `kanata-uninstall.sh`) are rewritten to use `brew services` accordingly.
+- **`init()` auto-discovery**: `restartScript` is now auto-discovered from the spoon's `scripts/` folder — no need to set it in `init.lua`. `spoonPath` is resolved via `hs.configdir` for reliable script lookup in all contexts.
+- **`autoStartKanata` simplified**: `kanataConfigPath` is no longer a hard requirement for autostart. It is only needed for device filtering (`macos-dev-names-include`/`macos-dev-names-exclude`) and config validation. Autostart now only requires the kanata binary and restart script.
+- **`stopService()` and `quitHammerspoon()`**: Always use `kanata-stop.sh` directly; Raycast is no longer required for basic stop/quit.
+- **Removed `checkForUpdates`**: Not applicable to brew-managed binaries.
+- **Brew resolution in scripts**: All scripts resolve `brew` in priority order (`/opt/homebrew/bin/brew` → `/usr/local/bin/brew` → `$PATH`) so both Apple Silicon and Intel Homebrew setups work correctly, including in Raycast's restricted `PATH` environment.
+
+### Fixed
+- **Mouse commands silently fail when run as a service**: `movemouse-*` and other pointer actions work when starting kanata manually (`sudo kanata --debug`) but do nothing when run via `brew services` or the spoon. Root cause: as a headless system `LaunchDaemon`, kanata has no login-session context and macOS requires the binary itself to have **Accessibility** permission in TCC (System Settings → Privacy & Security → Accessibility). Adding `/opt/homebrew/opt/kanata/bin/kanata` to Accessibility resolves the issue. **Input Monitoring** should be granted there too. Note: the terminal `sudo` case works because the process inherits Terminal.app's existing session-level TCC grants.
+
+### Migration from 1.0.x
+If you had the old LaunchDaemon setup (`/Library/LaunchDaemons/com.example.kanata.plist`), run `scripts/kanata-uninstall.sh` to remove legacy plists and log directories. Then follow the new Quick Start in README.md.
+
+**Context (1.0.3 era)**: Kanata 1.10.x needed root access to the Karabiner Virtual HID server socket under `/Library/Application Support/org.pqrs/tmp/rootonly/`, which required a system LaunchDaemon. Upstream Homebrew now handles this transparently via `sudo brew services`.
+
+## [Unreleased]
+
+### Notes
+
+- **Homebrew service workflow**: Kanata can be run with Homebrew’s service support instead of this spoon’s LaunchDaemon + scripts. Typical flow:
+  1. `brew install karabiner-elements`
+  2. `brew install kanata`
+  3. `sudo brew services start kanata`
+  Keep Karabiner-Elements.app **out** of Login Items and quit its menu bar app if you only need the virtual HID driver. System Settings → Privacy & Security permissions for Kanata are still required.
+- **What we used to work around (1.0.3 era)**: Kanata 1.10.x needed root access to the Karabiner Virtual HID server socket under `/Library/Application Support/org.pqrs/tmp/rootonly/`, so the install scripts used a **system LaunchDaemon** (`/Library/LaunchDaemons/com.example.kanata.plist`), logs under `/Library/Logs/Kanata/`, and the spoon could auto-start the service via `kanata-restart.sh`. If you are **migrating away** from that stack: unload/remove the LaunchDaemon (see `scripts/kanata-uninstall.sh`), remove `hs.loadSpoon("Kanata")` / `spoon.Kanata:start()` from `~/.hammerspoon/init.lua`, then use `brew services` as above. If you **stay** on the spoon, nothing in this note changes spoon behavior.
+
 ## [1.0.3] - 2025-10-17
 
 ### Fixed

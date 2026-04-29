@@ -1,178 +1,101 @@
--- Example configuration for Kanata.spoon
--- Copy this file to your ~/.hammerspoon/init.lua and customize as needed
+-- Example configuration for Kanata.spoon (v1.1.0)
+-- Copy relevant parts into your ~/.hammerspoon/init.lua
 
 --[[
 ====================================
-Example shorthand comments
+PREREQUISITES (one-time setup)
 ====================================
-]]
--- hs.loadSpoon("Kanata")
--- spoon.Kanata.restartScript = "Spoons/Kanata.spoon/scripts/kanata-restart.sh" -- Required: Path to restart script
--- spoon.Kanata.logger.setLogLevel('info') -- Optional: Set logger level ('debug', 'info', 'warn', 'error', 'nothing')
--- spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd" -- Optional: Path to Kanata config file (default: nil)
--- spoon.Kanata.checkInterval = 5 -- Optional: Check interval in seconds (default: 5)
--- spoon.Kanata.port = 10000 -- Optional: Port for health check API (default: nil)
--- spoon.Kanata.showMenuBar = true -- Optional: Show menu bar icon (default: true)
--- spoon.Kanata.startMonitoringOnLoad = true -- Optional: Start monitoring automatically when spoon loads (default: false)
--- spoon.Kanata.autoStartKanata = true -- Optional: Auto-start Kanata service at system boot (default: false)
--- spoon.Kanata.useRaycast = true -- Optional: Use Raycast commands for menu integration (default: false)
--- spoon.Kanata:start()
 
---[[
-====================================
-Complete configuration example
-====================================
+1. Install and start Kanata via Homebrew:
+   brew install karabiner-elements
+   brew install kanata
+   sudo brew services start kanata
+
+   Note: Quit Karabiner-Elements from the menu bar — only its virtual HID driver is needed.
+
+2. Grant permissions in System Settings → Privacy & Security:
+   - Input Monitoring → kanata
+   - Accessibility → kanata (if required)
+
+3. Copy Kanata.spoon to ~/.hammerspoon/Spoons/
+   Then add the configuration below to your init.lua.
 --]]
 
--- Load the Kanata Spoon
+--[[
+====================================
+MINIMAL SETUP
+====================================
+The spoon auto-discovers kanata-restart.sh from its own scripts/ folder and
+auto-detects your kanata config at ~/.config/kanata/kanata.kbd.
+--]]
+
 hs.loadSpoon("Kanata")
-
---[[
-====================================
-LOGGING CONFIGURATION
-====================================
---]]
-
--- Set logger level (options: 'debug', 'info', 'warn', 'error', 'nothing')
--- 'debug' shows all messages including device detection details
--- 'info' shows important events (device changes, restarts)
--- 'warn' shows warnings and errors only
--- 'error' shows errors only
--- 'nothing' disables all logging
-spoon.Kanata.logger.setLogLevel('info')
-
---[[
-====================================
-CORE CONFIGURATION
-====================================
---]]
-
--- Path to Kanata config file (optional, enables device filtering)
--- If set, spoon will parse macos-dev-names-include and macos-dev-names-exclude sections
--- If nil or empty string, all devices will be monitored
--- Default: nil (no filtering)
-spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
-
--- Path to restart script (required for autostart functionality)
--- This script should start/restart the Kanata service
--- Can be relative to Hammerspoon config dir or absolute path
--- Default: nil (autostart disabled)
-spoon.Kanata.restartScript = "Spoons/Kanata.spoon/scripts/kanata-restart.sh"
-
---[[
-====================================
-MONITORING CONFIGURATION
-====================================
---]]
-
--- Check interval in seconds (default: 5)
--- How often to check for new/removed devices
--- Lower values = more responsive but higher CPU usage
--- Higher values = less responsive but lower CPU usage
--- Range: 1-60 seconds recommended
-spoon.Kanata.checkInterval = 5
-
--- Port for health check API (optional)
--- If set, uses JSON API to verify Kanata is running and healthy
--- Example: kanata -p 10000 (then set this to 10000)
--- If nil, falls back to process-based detection
--- Benefits: More reliable, verifies Kanata is actually responding
--- Default: nil (process-based detection)
-spoon.Kanata.port = nil
-
---[[
-====================================
-UI CONFIGURATION
-====================================
---]]
-
--- Show menu bar icon (default: true)
--- If true, shows ⌨️ icon in menu bar with controls
--- If false, spoon runs in background without menu
--- Menu provides: Start/Stop Service, Raycast commands, config access
-spoon.Kanata.showMenuBar = true
-
---[[
-====================================
-AUTO-START CONFIGURATION
-====================================
---]]
-
--- Start monitoring automatically when spoon loads (default: false)
--- If true, monitoring starts immediately after spoon initialization
--- If false, you must manually start monitoring via menu or URL scheme
--- Note: This only starts monitoring, not the Kanata service
-spoon.Kanata.startMonitoringOnLoad = false
-
--- Auto-start Kanata service at system boot (default: false)
--- Requires both kanataConfigPath and restartScript to be set
--- If enabled but requirements missing, shows alert and opens console
--- Note: This only starts the service, not monitoring (use startMonitoringOnLoad for that)
--- Recommended: Set to true if you want Kanata to start automatically
-spoon.Kanata.autoStartKanata = false
-
---[[
-====================================
-RAYCAST INTEGRATION (OPTIONAL)
-====================================
---]]
-
--- Enable Raycast integration (default: false)
--- If true, adds Raycast command menu items and enables AppleScript
--- Setup required:
--- 1. Install Raycast from https://www.raycast.com/
--- 2. Add ~/.hammerspoon/Spoons/Kanata.spoon/scripts/ to Raycast Script Commands
--- 3. Approve scripts on first use (macOS will prompt)
--- See RAYCAST.md for detailed setup instructions
--- Commands added: Restart Kanata, Stop Kanata, Cleanup Kanata, Install Kanata
-spoon.Kanata.useRaycast = false
-
---[[
-====================================
-START THE SPOON
-====================================
---]]
-
--- Start the Kanata Spoon with the above configuration
+spoon.Kanata.startMonitoringOnLoad = true  -- Watch for new keyboards and restart kanata automatically
+spoon.Kanata.autoStartKanata = true        -- If kanata is not running when Hammerspoon loads, start it
 spoon.Kanata:start()
 
 --[[
 ====================================
-USAGE NOTES
+FULL CONFIGURATION (all options)
 ====================================
+--]]
 
-Menu Bar Controls:
-- Start/Stop Service: Controls both Kanata service and monitoring
-- Raycast commands (if enabled): Restart, Stop, Cleanup, Install
-- Config access: Open Kanata/Hammerspoon configs
-- Utility: Preferences, Console, Quit
+hs.loadSpoon("Kanata")
 
-URL Scheme:
-- Start monitoring: open "hammerspoon://kanata?action=start"
-- Stop monitoring: open "hammerspoon://kanata?action=stop"
-- Toggle monitoring: open "hammerspoon://kanata?action=toggle"
+-- Logging ('debug', 'info', 'warn', 'error', 'nothing')
+spoon.Kanata.logger.setLogLevel('info')
 
-Features:
-- Automatic device detection and Kanata restart
-- Config file validation on changes
-- Sleep/wake handling
-- Optional Raycast integration
-- Auto-start at boot
-- Health check API support
-- Device filtering via config
+--[[  CORE  ]]
 
-Configuration Tips:
-- For development: Set logger to 'debug' to see all activity
-- For production: Set logger to 'info' or 'warn' for cleaner logs
-- For headless use: Set showMenuBar to false
-- For automatic startup: Set both autoStartKanata and startMonitoringOnLoad to true
-- For device filtering: Set kanataConfigPath and configure include/exclude lists
+-- Path to Kanata config file (optional — auto-detected at ~/.config/kanata/kanata.kbd)
+-- Only needed if your config is in a non-standard location.
+-- When set, the spoon parses macos-dev-names-include / macos-dev-names-exclude for smart
+-- device filtering and validates the config before reloading.
+spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
 
-Documentation:
-- README.md - Complete documentation
-- RAYCAST.md - Raycast setup
-- CHANGELOG.md - Version history
+-- Path to kanata-restart.sh (auto-discovered from scripts/ if not set)
+-- Override only if you keep the script somewhere else.
+-- spoon.Kanata.restartScript = hs.configdir .. "/Spoons/Kanata.spoon/scripts/kanata-restart.sh"
 
+--[[  MONITORING  ]]
+
+-- How often to poll kanata --list for device changes (seconds, default: 5)
+spoon.Kanata.checkInterval = 5
+
+-- Port for health-check API (optional, enables JSON API health check instead of process scan)
+-- Start kanata with: kanata -c kanata.kbd --port 10000
+-- spoon.Kanata.port = 10000
+
+--[[  UI  ]]
+
+spoon.Kanata.showMenuBar = true  -- ⌨️ icon in menu bar
+
+--[[  AUTO-START  ]]
+
+-- Start device monitoring automatically when the spoon loads
+spoon.Kanata.startMonitoringOnLoad = true
+
+-- If kanata is not already running when Hammerspoon loads, start it via restartScript
+-- brew services handles boot-time start on its own; this is a safety net
+spoon.Kanata.autoStartKanata = true
+
+--[[  RAYCAST INTEGRATION (optional)  ]]
+
+-- Adds Raycast deeplink commands to the menu bar (Restart, Stop, Install, Uninstall)
+-- Setup: add ~/.hammerspoon/Spoons/Kanata.spoon/scripts/ to Raycast Script Commands
+-- spoon.Kanata.useRaycast = true
+
+--[[  START  ]]
+
+spoon.Kanata:start()
+
+--[[
+====================================
+URL SCHEME
+====================================
+open "hammerspoon://kanata?action=start"   -- start monitoring
+open "hammerspoon://kanata?action=stop"    -- stop monitoring
+open "hammerspoon://kanata?action=toggle"  -- toggle monitoring
 --]]
 
 -- Add your other Hammerspoon configurations below this line
