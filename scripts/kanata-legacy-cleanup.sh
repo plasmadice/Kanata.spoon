@@ -20,11 +20,16 @@
 #   • /Library/LaunchDaemons/homebrew.mxcl.kanata.plist (brew service)
 #   • Karabiner-Elements
 #
-# Run directly in Terminal — not as a Raycast script.
-# Requires: sudo password stored in Keychain under service "supa".
+# Run directly in Terminal. Privileged operations use the normal sudo prompt.
 #
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_admin.sh
+source "$SCRIPT_DIR/_admin.sh"
+# shellcheck source=_progress.sh
+source "$SCRIPT_DIR/_progress.sh"
 
 # ── colours ────────────────────────────────────────────────────────────────
 RED=$'\033[0;31m'; YELLOW=$'\033[0;33m'; GREEN=$'\033[0;32m'
@@ -65,28 +70,18 @@ case "$answer" in
 esac
 echo
 
-# ── sudo password from keychain ────────────────────────────────────────────
-pw_name="supa"
-pw_account=$(id -un)
-if ! cli_password=$(security find-generic-password -w -s "$pw_name" -a "$pw_account" 2>&1); then
-    echo "${RED}❌ Could not retrieve password from Keychain.${RESET}"
-    echo "   Add it with:"
-    echo "     security add-generic-password -s 'supa' -a '$(id -un)' -w 'YOUR_PASSWORD'"
-    exit 1
-fi
-
-sudo_run() { echo "$cli_password" | sudo -S "$@" 2>/dev/null; }
-
 # ── 1. system LaunchDaemon ─────────────────────────────────────────────────
+progress 5 "Beginning legacy cleanup"
 info "1/4  System LaunchDaemon (com.example.kanata)"
 SYSTEM_PLIST="/Library/LaunchDaemons/com.example.kanata.plist"
 if [ -f "$SYSTEM_PLIST" ]; then
-    sudo_run launchctl bootout system "$SYSTEM_PLIST" 2>/dev/null || true
-    sudo_run rm -f "$SYSTEM_PLIST"
+    run_as_root launchctl bootout system "$SYSTEM_PLIST" 2>/dev/null || true
+    run_as_root rm -f "$SYSTEM_PLIST"
     removed "$SYSTEM_PLIST"
 else
     skipped
 fi
+progress 25 "Legacy system service checked"
 
 # ── 2. user LaunchAgent ────────────────────────────────────────────────────
 info "2/4  User LaunchAgent (com.example.kanata)"
@@ -98,15 +93,17 @@ if [ -f "$USER_PLIST" ]; then
 else
     skipped
 fi
+progress 50 "Legacy user service checked"
 
 # ── 3. legacy log directory ────────────────────────────────────────────────
 info "3/4  Legacy log directory (/Library/Logs/Kanata)"
 if [ -d "/Library/Logs/Kanata" ]; then
-    sudo_run rm -rf "/Library/Logs/Kanata"
+    run_as_root rm -rf "/Library/Logs/Kanata"
     removed "/Library/Logs/Kanata"
 else
     skipped
 fi
+progress 75 "Legacy logs checked"
 
 # ── 4. non-Homebrew kanata binaries ───────────────────────────────────────
 info "4/4  Non-Homebrew kanata binaries"
@@ -139,7 +136,7 @@ do
         continue
     fi
 
-    sudo_run rm -f "$bin_path" 2>/dev/null || rm -f "$bin_path" 2>/dev/null || true
+    run_as_root rm -f "$bin_path" 2>/dev/null || rm -f "$bin_path" 2>/dev/null || true
     removed "$bin_path"
     found_any_binary=true
 done
@@ -147,6 +144,7 @@ done
 if [ "$found_any_binary" = false ]; then
     skipped
 fi
+progress 100 "Legacy cleanup complete"
 
 # ── done ───────────────────────────────────────────────────────────────────
 echo

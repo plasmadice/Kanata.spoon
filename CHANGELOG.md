@@ -5,6 +5,30 @@ All notable changes to Kanata.spoon will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.2] - 2026-09-21
+
+### Changed
+- **Kanata 1.12 target**: the installer now upgrades older Homebrew installations to Kanata 1.12.0 and verifies that Homebrew supplied the targeted version.
+- **Permission migration guidance**: the installer now tells users to remove stale versioned Cellar entries and add `/opt/homebrew/opt/kanata/bin/kanata` to both Input Monitoring and Accessibility.
+- **Complete uninstall**: the uninstaller now handles root-owned Homebrew kegs, the current `sh.brew.kanata` service, service logs, and stale kanata-tray configuration.
+- **No Raycast dependency**: removed Raycast integration and script metadata. Privileged operations again use the existing `supa` login-keychain password automatically, with normal `sudo` or macOS authorization as fallbacks.
+- **Bundled standalone DriverKit**: install and restart now verify, install, activate, and keep alive the official Karabiner VirtualHID DriverKit 6.2.0 package using KeyPath's package-and-LaunchDaemon workflow. The full Karabiner-Elements app is no longer required.
+- **Homebrew bottle config path**: install and restart scripts now replace any bottle-builder `--cfg` path with the current user's `~/.config/kanata/kanata.kbd`.
+- **Direct management actions**: added combined Install/Restart and Uninstall actions in the Hammerspoon menu without routing through Raycast. Service stopping remains part of the combined Start/Stop Service control.
+- **Unified service workflow**: install, restart, start, stop, autostart, and automatic device restarts use the idempotent `kanata-install.sh`; healthy dependencies and services are preserved.
+- **Numeric operation progress**: management scripts emit checkpoint percentages, shown directly in the menu-bar item and written to the Hammerspoon Console until each operation completes.
+- **Stable progress sequence**: duplicate final `hs.task` output is de-duplicated, so progress advances once from 1% through 100% instead of replaying.
+- **Restart-loop prevention**: device monitoring refreshes its baseline while service changes settle, preventing virtual-device reconnects from launching another management cycle.
+- **Startup health enforcement**: starting the Spoon always checks Kanata service health and starts it when necessary; monitoring starts only after that check succeeds.
+- **Persisted service intent**: explicit Start/Stop Service choices survive Spoon and Hammerspoon restarts. Unexpected service exits are restarted only when the saved desired state is running.
+- **Exact process detection**: replaced command-line substring matching with `pgrep -x kanata`, avoiding false positives from editor extensions and paths containing “kanata.”
+- **Safe keyboard release**: Stop Service and Hammerspoon shutdown now stop Kanata and restart the KeepAlive VirtualHID daemon, following KeyPath's recovery method to clear stale reports and restore normal physical-keyboard passthrough.
+
+### Compatibility
+- Validated the existing `~/.config/kanata/kanata.kbd` with the official Kanata 1.12.0 arm64 binaries.
+- Reviewed the Kanata 1.12 behavior changes. The config uses `switch`, but not the affected `rpt-any` or chordsv2 paths, so no config migration is required.
+- The 1.12.1 prerelease fixes left/right inertial mouse-wheel state, which is compatible with the config's `mwheel-left` and `mwheel-right` actions.
+
 ## [1.2.0] - 2026-04-29
 
 ### Added

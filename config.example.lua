@@ -6,12 +6,8 @@
 PREREQUISITES (one-time setup)
 ====================================
 
-1. Install and start Kanata via Homebrew:
-   brew install karabiner-elements
-   brew install kanata
-   sudo brew services start kanata
-
-   Note: Quit Karabiner-Elements from the menu bar — only its virtual HID driver is needed.
+1. Install Kanata and the bundled standalone VirtualHID DriverKit:
+   bash ~/.hammerspoon/Spoons/Kanata.spoon/scripts/kanata-install.sh
 
 2. Grant permissions in System Settings → Privacy & Security:
    - Input Monitoring → kanata
@@ -25,13 +21,12 @@ PREREQUISITES (one-time setup)
 ====================================
 MINIMAL SETUP
 ====================================
-The spoon auto-discovers kanata-restart.sh from its own scripts/ folder and
+The spoon auto-discovers the idempotent kanata-install.sh management script and
 auto-detects your kanata config at ~/.config/kanata/kanata.kbd.
 --]]
 
 hs.loadSpoon("Kanata")
 spoon.Kanata.startMonitoringOnLoad = true  -- Watch for new keyboards and restart kanata automatically
-spoon.Kanata.autoStartKanata = true        -- If kanata is not running when Hammerspoon loads, start it
 spoon.Kanata:start()
 
 --[[
@@ -53,9 +48,9 @@ spoon.Kanata.logger.setLogLevel('info')
 -- device filtering and validates the config before reloading.
 spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
 
--- Path to kanata-restart.sh (auto-discovered from scripts/ if not set)
+-- Shared install/restart script (auto-discovered from scripts/ if not set)
 -- Override only if you keep the script somewhere else.
--- spoon.Kanata.restartScript = hs.configdir .. "/Spoons/Kanata.spoon/scripts/kanata-restart.sh"
+-- spoon.Kanata.restartScript = hs.configdir .. "/Spoons/Kanata.spoon/scripts/kanata-install.sh"
 
 --[[  MONITORING  ]]
 
@@ -74,16 +69,6 @@ spoon.Kanata.showMenuBar = true  -- ⌨️ icon in menu bar
 
 -- Start device monitoring automatically when the spoon loads
 spoon.Kanata.startMonitoringOnLoad = true
-
--- If kanata is not already running when Hammerspoon loads, start it via restartScript
--- brew services handles boot-time start on its own; this is a safety net
-spoon.Kanata.autoStartKanata = true
-
---[[  RAYCAST INTEGRATION (optional)  ]]
-
--- Adds Raycast deeplink commands to the menu bar (Restart, Stop, Install, Uninstall)
--- Setup: add ~/.hammerspoon/Spoons/Kanata.spoon/scripts/ to Raycast Script Commands
--- spoon.Kanata.useRaycast = true
 
 --[[  START  ]]
 

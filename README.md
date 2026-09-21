@@ -2,11 +2,13 @@
 
 Hammerspoon Spoon for monitoring and managing [Kanata](https://github.com/jtroo/kanata) keyboard remapper on macOS.
 
+Kanata.spoon 1.11.2 targets Kanata 1.12.0.
+
 ## Features
 
 - 🔄 Automatic device detection and Kanata restart
 - 🎛️ Menu bar controls
-- 🚀 Optional Raycast integration
+- 📊 Numeric menu-bar progress for install, restart, stop, and uninstall
 - ⚙️ Config validation on changes
 - 🛌 Sleep/wake handling
 - 🔗 URL scheme support
@@ -18,12 +20,20 @@ Hammerspoon Spoon for monitoring and managing [Kanata](https://github.com/jtroo/
 Install and start Kanata via Homebrew:
 
 ```bash
-brew install karabiner-elements
-brew install kanata
-sudo brew services start kanata
+bash ~/.hammerspoon/Spoons/Kanata.spoon/scripts/kanata-install.sh
 ```
 
-> Quit Karabiner-Elements from the menu bar — only its virtual HID driver is needed. Then grant permissions in **System Settings → Privacy & Security**:
+The installer and restart action use the existing `supa` login-keychain item
+for non-interactive administrator access. If that item is unavailable, they
+fall back to the normal `sudo` prompt in Terminal or the standard macOS
+administrator dialog when launched from Hammerspoon.
+
+The Spoon bundles the standalone Karabiner VirtualHID DriverKit 6.2.0 package,
+verifies its official SHA-256 digest, and installs/activates it with the same
+package and LaunchDaemon workflow used by KeyPath. The full Karabiner-Elements
+application is not required.
+
+> Grant permissions in **System Settings → Privacy & Security**:
 > - **Input Monitoring** — allows kanata to read keyboard events
 > - **Accessibility** — **required for mouse commands** (movemouse-*, scroll, etc.)
 >
@@ -37,13 +47,12 @@ sudo brew services start kanata
 ```lua
 hs.loadSpoon("Kanata")
 spoon.Kanata.startMonitoringOnLoad = true  -- restart kanata when new keyboards are detected
-spoon.Kanata.autoStartKanata = true        -- start kanata if it isn't running when Hammerspoon loads
 spoon.Kanata:start()
 ```
 
 3. Reload Hammerspoon
 
-That's it. The spoon auto-discovers `kanata-restart.sh` from its own `scripts/` folder and auto-detects your config at `~/.config/kanata/kanata.kbd`.
+That's it. The spoon auto-discovers the idempotent `kanata-install.sh` management script and auto-detects your config at `~/.config/kanata/kanata.kbd`.
 
 ## Configuration
 
@@ -59,9 +68,9 @@ spoon.Kanata.logger.setLogLevel('info')
 -- config with `kanata --check` before reloading.
 spoon.Kanata.kanataConfigPath = os.getenv("HOME") .. "/.config/kanata/kanata.kbd"
 
--- Restart script (auto-discovered from spoon's scripts/ folder)
+-- Shared install/restart script (auto-discovered from spoon's scripts/ folder)
 -- Override only if you keep the script somewhere else.
--- spoon.Kanata.restartScript = hs.configdir .. "/Spoons/Kanata.spoon/scripts/kanata-restart.sh"
+-- spoon.Kanata.restartScript = hs.configdir .. "/Spoons/Kanata.spoon/scripts/kanata-install.sh"
 
 -- How often to poll for device changes (seconds, default: 5)
 spoon.Kanata.checkInterval = 5
@@ -72,15 +81,10 @@ spoon.Kanata.checkInterval = 5
 
 spoon.Kanata.showMenuBar = true           -- ⌨️ icon in menu bar
 spoon.Kanata.startMonitoringOnLoad = true -- watch for new keyboards, auto-restart kanata
-spoon.Kanata.autoStartKanata = true       -- start kanata if not running on Hammerspoon load
 
 -- Auto-reload kanata when kanata.kbd is saved (off by default)
 -- Requires monitoring to be active and kanataConfigPath to be set
 -- spoon.Kanata.reloadOnConfigChange = true
-
--- Optional Raycast integration (adds commands to menu bar)
--- See RAYCAST.md for setup instructions
--- spoon.Kanata.useRaycast = true
 
 spoon.Kanata:start()
 ```
@@ -89,33 +93,23 @@ See `config.example.lua` for a fully-annotated example.
 
 ## Autostart
 
-Brew services registers a system LaunchDaemon so kanata starts at boot automatically. The spoon's `autoStartKanata` is a **safety net**: if kanata somehow isn't running when Hammerspoon loads, the spoon will start it via the restart script.
-
-To enable both:
+Brew services registers a system LaunchDaemon so kanata starts at boot automatically. Whenever the Spoon starts, it uses an exact `kanata` process health check and starts the service through the shared management script when necessary. An explicit **Stop Service** choice is persisted across Spoon and Hammerspoon restarts; **Start Service** changes the saved state back to running. Device monitoring remains optional:
 
 ```lua
-spoon.Kanata.autoStartKanata = true
 spoon.Kanata.startMonitoringOnLoad = true
 spoon.Kanata:start()
 ```
 
-## Raycast Integration
-
-To add Raycast commands to the menu:
-
-1. Install [Raycast](https://www.raycast.com/)
-2. Add `~/.hammerspoon/Spoons/Kanata.spoon/scripts/` to Raycast Script Commands
-3. Enable in config: `spoon.Kanata.useRaycast = true`
-4. Reload Hammerspoon and approve scripts on first use
-
-See [RAYCAST.md](RAYCAST.md) for detailed setup.
+Stopping the service or quitting Hammerspoon first stops Kanata and then
+restarts the KeepAlive VirtualHID daemon. This clears stale virtual keyboard
+state so physical keyboards immediately return to normal macOS passthrough.
 
 ## Menu Bar
 
 Click ⌨️ for:
 
 - **Start/Stop Service** — controls both Kanata service and device monitoring
-- **Restart/Stop/Install Kanata** (Raycast, when enabled)
+- **Install/Restart and Uninstall Kanata** — runs the bundled management scripts directly
 - **Open Kanata Config** / **Open Hammerspoon Config**
 - **Show Console** / **Quit Hammerspoon**
 - **⚙️ Settings** — toggle monitoring options inline
@@ -136,8 +130,8 @@ open "hammerspoon://kanata?action=toggle"  # toggle monitoring
 | Service detection | Process scan, or JSON health-check API when `port` is set |
 | Device filtering | Parses `macos-dev-names-include`/`macos-dev-names-exclude` from config |
 | Config validation | `kanata --check` before reloading on file change |
-| Restart | Calls `kanata-restart.sh` → `sudo brew services restart kanata` |
-| Stop | Calls `kanata-stop.sh` → `sudo brew services stop kanata` |
+| Install / restart | Calls the idempotent `kanata-install.sh`; healthy dependencies and services are preserved |
+| Start / stop service | Calls `kanata-install.sh` in its normal or `--stop` mode and controls monitoring |
 
 ## Configuration Variables
 
@@ -145,12 +139,10 @@ open "hammerspoon://kanata?action=toggle"  # toggle monitoring
 |----------|------|---------|-------------|
 | `checkInterval` | number | 5 | Seconds between device checks |
 | `kanataConfigPath` | string | auto | Path to Kanata config (for device filtering) |
-| `restartScript` | string | auto | Path to `kanata-restart.sh` |
+| `restartScript` | string | auto | Path to the shared `kanata-install.sh` management script |
 | `port` | number | nil | Enable JSON health-check API on this port |
 | `showMenuBar` | boolean | true | Show menu bar icon |
 | `startMonitoringOnLoad` | boolean | false | Auto-start device monitoring |
-| `autoStartKanata` | boolean | false | Start kanata if not running on load |
-| `useRaycast` | boolean | false | Add Raycast commands to menu |
 | `reloadOnConfigChange` | boolean | false | Validate and restart kanata when `kanata.kbd` is saved |
 | `restartCooldown` | number | 15 | Seconds to block auto-restarts after one fires (prevents restart loops) |
 
@@ -160,7 +152,7 @@ open "hammerspoon://kanata?action=toggle"  # toggle monitoring
 
 The Homebrew formula plist ships with `--no-wait` (skips the interactive "press Enter to exit" prompt) but **not** `--nodelay` (removes the 2-second startup sleep). Without `--nodelay`, kanata's virtual mouse device does not finish initializing and mouse layer actions silently fail for the lifetime of that process.
 
-The install and restart scripts in this spoon automatically patch the formula plist to add `--nodelay` before starting the service, so this is handled for you. If you ever start kanata manually, always include `--nodelay`:
+The shared install/restart script automatically patches the formula plist to add `--nodelay` before starting the service, so this is handled for you. If you ever start kanata manually, always include `--nodelay`:
 
 ```bash
 sudo kanata -c ~/.config/kanata/kanata.kbd --nodelay
@@ -192,7 +184,7 @@ sudo rm /Library/LaunchDaemons/com.example.kanata.plist
 
 ### Mouse commands silently fail when running as a service
 
-`movemouse-*`, scroll, and other pointer actions work fine when you run kanata manually in a terminal (`sudo kanata ... --debug`) but silently do nothing when kanata is started via `brew services`, Raycast, or the spoon.
+`movemouse-*`, scroll, and other pointer actions work fine when you run kanata manually in a terminal (`sudo kanata ... --debug`) but silently do nothing when kanata is started via `brew services` or the spoon.
 
 **Root cause**: when kanata runs as a system `LaunchDaemon` it has no user-session context. macOS checks the binary's own TCC entry for permission to inject pointer events — and that entry doesn't exist until you explicitly grant it.
 
@@ -212,13 +204,12 @@ Repeat the same steps for **Input Monitoring** while you're there.
 
 ### Privilege level
 
-All three start paths run kanata as **root**:
+Both start paths run kanata as **root**:
 
 | Method | How it runs |
 |--------|-------------|
 | `sudo brew services start kanata` | System LaunchDaemon, user = root |
-| Raycast `kanata-restart.sh` | Calls above via keychain `sudo` |
-| Kanata.spoon autostart | Calls `kanata-restart.sh` → same |
+| Kanata.spoon autostart | Calls `kanata-install.sh`; uses the `supa` keychain item, with macOS authorization as fallback |
 
 ## Troubleshooting
 
@@ -228,12 +219,7 @@ All three start paths run kanata as **root**:
 
 **Autostart fails**
 - Check Console for the missing-requirement message
-- Run `bash ~/.hammerspoon/Spoons/Kanata.spoon/scripts/kanata-restart.sh` in Terminal to test
-
-**Raycast scripts don't work**
-- Verify the scripts folder is added to Raycast
-- Approve scripts on first use (macOS will prompt)
-- Check scripts are executable: `chmod +x scripts/*.sh`
+- Run `bash ~/.hammerspoon/Spoons/Kanata.spoon/scripts/kanata-install.sh` in Terminal to test
 
 **Config changes not detected**
 - Verify `kanataConfigPath` points to the right file
@@ -242,8 +228,8 @@ All three start paths run kanata as **root**:
 
 - macOS 12 (Ventura)+ recommended
 - [Hammerspoon](https://www.hammerspoon.org/) 0.9.90+
-- [Kanata](https://github.com/jtroo/kanata) installed via `brew install kanata`
-- [Karabiner-Elements](https://karabiner-elements.pqrs.org/) (virtual HID driver only)
+- [Kanata 1.12.0](https://github.com/jtroo/kanata/releases/tag/v1.12.0) installed via `brew install kanata`
+- [Karabiner VirtualHID DriverKit 6.2.0](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/tag/v6.2.0) (bundled and installed automatically)
 - [Permissions](https://github.com/jtroo/kanata/issues/1264#issuecomment-2763085239) granted in System Settings
 
 ## License
@@ -254,4 +240,4 @@ MIT - See [LICENSE](LICENSE) file
 
 - [Hammerspoon](https://www.hammerspoon.org/)
 - [Kanata](https://github.com/jtroo/kanata)
-- [Karabiner-Elements](https://karabiner-elements.pqrs.org/)
+- [Karabiner DriverKit VirtualHIDDevice](https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice)

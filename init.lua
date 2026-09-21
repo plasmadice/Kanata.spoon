@@ -2,7 +2,7 @@
 ---
 --- Monitors Kanata keyboard remapper and automatically restarts when new devices are detected.
 --- Kanata is managed as a Homebrew service (sudo brew services start kanata).
---- Includes optional menu bar controls and Raycast script integration.
+--- Includes optional menu bar controls.
 ---
 --- Download: https://github.com/plasmadice/Kanata.spoon
 --- @author plasmadice
@@ -13,7 +13,7 @@ obj.__index = obj
 
 -- Metadata
 obj.name = "Kanata"
-obj.version = "1.2.0"
+obj.version = "1.11.2"
 obj.author = "plasmadice"
 obj.homepage = "https://github.com/plasmadice/Kanata.spoon"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
@@ -36,16 +36,9 @@ obj.kanataConfigPath = nil
 
 --- Kanata.restartScript
 --- Variable
---- Path to kanata-restart.sh (auto-discovered from the spoon's scripts/ folder if not set)
---- The script should run: sudo brew services restart kanata
+--- Path to the idempotent Kanata install/restart script (auto-discovered from
+--- the spoon's scripts/ folder if not set).
 obj.restartScript = nil
-
---- Kanata.useRaycast
---- Variable
---- Whether to use Raycast script commands for menu integration (default: false)
---- When enabled, adds Raycast deeplinks to menu for kanata-* commands
---- Requires Raycast with script commands configured
-obj.useRaycast = false
 
 --- Kanata.showMenuBar
 --- Variable
@@ -56,13 +49,6 @@ obj.showMenuBar = true
 --- Variable
 --- Whether to start monitoring automatically when the spoon is loaded (default: false)
 obj.startMonitoringOnLoad = false
-
---- Kanata.autoStartKanata
---- Variable
---- Whether to start Kanata via the restart script if it is not already running when Hammerspoon loads (default: false)
---- Acts as a safety net — brew services normally handles boot-time autostart on its own
---- If enabled but kanata binary or restart script is missing, shows an alert and opens Console
-obj.autoStartKanata = false
 
 --- Kanata.port
 --- Variable
@@ -96,10 +82,13 @@ obj.menuBar = nil
 obj.configWatcher = nil
 obj.configChangeTimer = nil
 obj.kanataBinaryPath = nil
-obj.restartAnimationTimer = nil
-obj.restartAnimationStopTimer = nil
-obj.restartAnimationStep = 0
-obj.originalIcon = nil
+obj.operationProgress = nil
+obj.operationStatus = nil
+obj.operationGeneration = 0
+obj.activeManagementTask = nil
+obj.ignoreDeviceChangesUntil = 0
+obj.serviceStateSettingKey = "Kanata.serviceDesiredRunning"
+obj.shutdownCallbackInstalled = false
 obj.recentlyRemovedDevices = {}
 obj.spoonPath = nil  -- Absolute path to the spoon directory, set in init()
 obj.lastRestartTime = 0
@@ -114,9 +103,9 @@ function obj:init()
   -- Resolve the spoon's own directory so scripts can be found relative to it
   self.spoonPath = hs.configdir .. "/Spoons/" .. self.name .. ".spoon"
 
-  -- Auto-discover restart script from the spoon's scripts/ folder if not set
+  -- Install and restart deliberately use the same idempotent script.
   if not self.restartScript then
-    local candidate = self.spoonPath .. "/scripts/kanata-restart.sh"
+    local candidate = self.spoonPath .. "/scripts/kanata-install.sh"
     if self:fileExists(candidate) then
       self.restartScript = candidate
       self.logger.i("Auto-discovered restart script: " .. candidate)
@@ -148,12 +137,6 @@ function obj:start()
   self.logger.i("Restart script: " .. (self.restartScript or "not set"))
   self.logger.i("Port for health check: " .. (self.port or "not set"))
   
-  -- Enable AppleScript if using Raycast
-  if self.useRaycast then
-    hs.allowAppleScript(true)
-    self.logger.i("AppleScript enabled for Raycast integration")
-  end
-  
   -- Parse device lists from config
   self:parseDeviceLists(true)
   
@@ -170,21 +153,71 @@ function obj:start()
   if self.showMenuBar then
     self:setupMenuBar()
   end
+
+  self:installShutdownCallback()
   
-  -- Handle autostart of Kanata service
-  if self.autoStartKanata then
-    self:handleAutoStart()
+  -- Restore the user's last explicit Start/Stop choice. A missing setting
+  -- defaults to running so existing installations retain autostart behavior.
+  if not self:isServiceDesiredRunning() then
+    self.logger.i("Kanata service was explicitly stopped; preserving stopped state")
+    return self
   end
-  
-  -- Start monitoring if configured to do so
-  if self.startMonitoringOnLoad then
-    self.logger.i("Auto-starting monitoring service...")
-    self:startMonitoring()
-  else
-    self.logger.i("Monitoring not auto-started (startMonitoringOnLoad = false)")
-  end
+
+  -- Service health is checked when startup is desired. Monitoring waits for
+  -- that asynchronous start/repair operation to finish successfully.
+  self:handleAutoStart(function(exitCode)
+    if exitCode ~= 0 then
+      return
+    end
+
+    if self.startMonitoringOnLoad then
+      self.logger.i("Auto-starting monitoring service...")
+      self:startMonitoring()
+    else
+      self.logger.i("Monitoring not auto-started (startMonitoringOnLoad = false)")
+    end
+  end)
   
   return self
+end
+
+function obj:isServiceDesiredRunning()
+  local desired = hs.settings.get(self.serviceStateSettingKey)
+  if desired == nil then
+    return true
+  end
+  return desired == true
+end
+
+function obj:setServiceDesiredRunning(desired)
+  hs.settings.set(self.serviceStateSettingKey, desired == true)
+  self.logger.i("Persisted Kanata service state: " .. (desired and "running" or "stopped"))
+end
+
+function obj:installShutdownCallback()
+  if self.shutdownCallbackInstalled then
+    return
+  end
+
+  local previousShutdownCallback = hs.shutdownCallback
+  hs.shutdownCallback = function()
+    if previousShutdownCallback then
+      local ok, err = pcall(previousShutdownCallback)
+      if not ok then
+        self.logger.e("Previous Hammerspoon shutdown callback failed: " .. tostring(err))
+      end
+    end
+
+    if self:isKanataServiceRunningProcessBased() and self.restartScript then
+      self.logger.i("Hammerspoon is shutting down; safely stopping Kanata")
+      local command = string.format("%q --stop", self.restartScript)
+      local output, status = hs.execute(command)
+      if not status then
+        self.logger.e("Safe Kanata shutdown failed: " .. tostring(output))
+      end
+    end
+  end
+  self.shutdownCallbackInstalled = true
 end
 
 --- Kanata:stop()
@@ -208,16 +241,6 @@ function obj:stop()
   if self.configChangeTimer then
     self.configChangeTimer:stop()
     self.configChangeTimer = nil
-  end
-  
-  -- Clean up restart animation
-  if self.restartAnimationTimer then
-    self.restartAnimationTimer:stop()
-    self.restartAnimationTimer = nil
-  end
-  if self.restartAnimationStopTimer then
-    self.restartAnimationStopTimer:stop()
-    self.restartAnimationStopTimer = nil
   end
   
   -- Remove menu bar
@@ -271,6 +294,15 @@ function obj:startMonitoring(suppressLog)
     end
     
     local currDevices = self:getKanataDeviceList()
+
+    -- Management operations can temporarily disconnect and reconnect virtual
+    -- devices. Refresh the baseline without recursively launching the script.
+    if self.activeManagementTask or os.time() < self.ignoreDeviceChangesUntil then
+      prevDevices = currDevices
+      self.logger.d("Device changes ignored while service state settles")
+      return
+    end
+
     local newDevices, removedDevices = self:getDeviceChanges(prevDevices, currDevices)
 
     -- Debug logging for device detection
@@ -428,26 +460,11 @@ function obj:isKanataServiceRunning()
 end
 
 function obj:isKanataServiceRunningProcessBased()
-  -- Always use process-based detection (for autostart checks)
-  -- Check for Kanata process with port flag (if port is configured)
-  local psOutput
-  if self.port then
-    psOutput = hs.execute("ps aux | grep -E '[k]anata.*--port.*" .. self.port .. "'")
-  else
-    -- Check for any Kanata process if no port is configured
-    psOutput = hs.execute("ps aux | grep -E '[k]anata'")
-  end
-  
-  if psOutput and psOutput ~= "" then
-    -- Filter out grep process itself and check for actual kanata process
-    for line in psOutput:gmatch("[^\r\n]+") do
-      if not line:match("grep") and line:match("kanata") then
-        return true
-      end
-    end
-  end
-  
-  return false
+  -- Match the executable process name exactly. Searching the whole command
+  -- line produces false positives from editors and extensions whose paths
+  -- contain "kanata".
+  local output, status = hs.execute("/usr/bin/pgrep -x kanata 2>/dev/null")
+  return status == true and output ~= nil and output ~= ""
 end
 
 function obj:checkKanataHealth()
@@ -479,7 +496,7 @@ function obj:checkKanataHealth()
   end
 end
 
-function obj:startKanataService()
+function obj:startKanataService(onComplete)
   if not self.restartScript then
     self.logger.e("Cannot start Kanata: restartScript not configured")
     return false
@@ -490,30 +507,16 @@ function obj:startKanataService()
     return false
   end
   
-  self.logger.i("Starting Kanata via restart script: " .. self.restartScript)
-
-  local task = hs.task.new(self.restartScript, function(exitCode, stdOut, stdErr)
-    if exitCode == 0 then
-      self.logger.i("Kanata service started successfully")
-    else
-      self.logger.e("Failed to start Kanata service (exit code: " .. tostring(exitCode) .. ")")
-      if stdErr and stdErr ~= "" then
-        self.logger.e("Error output: " .. stdErr)
-      end
-    end
-  end, {})
-  
-  local success = task:start()
-  if not success then
-    self.logger.e("Failed to execute restart script")
-    return false
-  end
-  
-  return true
+  self.logger.i("Starting Kanata via management script: " .. self.restartScript)
+  return self:runManagementScript(
+    self.restartScript,
+    "Kanata service started",
+    { showAlert = false, onComplete = onComplete }
+  )
 end
 
-function obj:handleAutoStart()
-  self.logger.i("Checking autostart configuration...")
+function obj:handleAutoStart(onComplete)
+  self.logger.i("Checking Kanata service status...")
 
   -- Validate requirements (kanataConfigPath is optional — only needed for device filtering)
   local missingRequirements = {}
@@ -524,13 +527,9 @@ function obj:handleAutoStart()
     table.insert(missingRequirements, "restartScript not found: " .. self.restartScript)
   end
 
-  if not self:isKanataAvailable() then
-    table.insert(missingRequirements, "Kanata binary not found (is 'brew install kanata' done?)")
-  end
-  
   -- If requirements are missing, show alert and open console
   if #missingRequirements > 0 then
-    local errorMsg = "Kanata autostart enabled but requirements missing:\n" .. table.concat(missingRequirements, "\n")
+    local errorMsg = "Kanata service check failed; requirements missing:\n" .. table.concat(missingRequirements, "\n")
     self.logger.e(errorMsg)
     
     -- Show alert
@@ -539,29 +538,37 @@ function obj:handleAutoStart()
     -- Open Hammerspoon console
     hs.openConsole()
     
-    return
+    if onComplete then onComplete(1) end
+    return false
   end
   
-  -- All requirements met, check if Kanata is already running
-  -- Use process-based detection for autostart check (not health check API)
-  local isRunning = self:isKanataServiceRunningProcessBased()
+  local isRunning = self:isKanataServiceRunning()
   if isRunning then
-    self.logger.i("Kanata service is already running, skipping autostart")
-    return
+    self.logger.i("Kanata service is healthy; startup is not required")
+    if onComplete then onComplete(0) end
+    return true
   end
   
-  -- Start Kanata service
-  self.logger.i("Kanata service not running, starting via autostart...")
-  local success = self:startKanataService()
+  self.logger.i("Kanata service is not running; starting it now...")
+  local success = self:startKanataService(function(exitCode, stdOut, stdErr)
+    if exitCode == 0 then
+      self.logger.i("Kanata service started during Spoon startup")
+      hs.alert.show("✅ Kanata started automatically", 2)
+    else
+      self.logger.e("Kanata startup failed")
+      hs.alert.show("❌ Kanata startup failed\nCheck Console for details", 5)
+      hs.openConsole()
+    end
   
-  if success then
-    self.logger.i("Kanata autostart initiated successfully")
-    hs.alert.show("✅ Kanata started automatically", 2)
-  else
-    self.logger.e("Kanata autostart failed")
-    hs.alert.show("❌ Kanata autostart failed\nCheck Console for details", 5)
-    hs.openConsole()
+    if onComplete then onComplete(exitCode, stdOut, stdErr) end
+  end)
+
+  if not success then
+    if onComplete then onComplete(1) end
+    return false
   end
+
+  return true
 end
 
 function obj:getKanataDeviceList()
@@ -596,8 +603,8 @@ function obj:getKanataDeviceList()
     local inTable = false
     local headerSkipped = false
     
-    for line in output:gmatch("[^\r\n]+") do
-      line = line:match("^%s*(.-)%s*$")  -- trim whitespace
+    for rawLine in output:gmatch("[^\r\n]+") do
+      local line = rawLine:match("^%s*(.-)%s*$")  -- trim whitespace
       
       -- Skip empty lines and section headers
       if line == "" or line:match("^=+$") or line:match("Available keyboard devices") then
@@ -642,8 +649,8 @@ function obj:getKanataDeviceList()
     end
   else
     -- Parse old simple list format (pre-1.10.0)
-    for line in output:gmatch("[^\r\n]+") do
-      line = line:match("^%s*(.-)%s*$")  -- trim whitespace
+    for rawLine in output:gmatch("[^\r\n]+") do
+      local line = rawLine:match("^%s*(.-)%s*$")  -- trim whitespace
       if line ~= "" then
         devices[line] = true
       end
@@ -684,9 +691,9 @@ function obj:parseDeviceLists(logDevices)
   local inIncludeSection = false
   local inExcludeSection = false
   
-  for line in content:gmatch("[^\r\n]+") do
+  for rawLine in content:gmatch("[^\r\n]+") do
     -- Trim whitespace
-    line = line:match("^%s*(.-)%s*$")
+    local line = rawLine:match("^%s*(.-)%s*$")
     
     -- Check if we're entering the include section
     if line:match("macos%-dev%-names%-include%s*%(") then
@@ -835,50 +842,13 @@ function obj:logDeviceFilteringInfo(devices, action)
   end
 end
 
-function obj:showRestartAnimation()
-  if not self.menuBar then
-    return
-  end
-
-  -- Cancel any in-progress animation before starting a new one.
-  -- Without this, rapid successive calls leak the doEvery timer and
-  -- the anonymous doAfter cleanup races with the new animation.
-  if self.restartAnimationTimer then
-    self.restartAnimationTimer:stop()
-    self.restartAnimationTimer = nil
-  end
-  if self.restartAnimationStopTimer then
-    self.restartAnimationStopTimer:stop()
-    self.restartAnimationStopTimer = nil
-  end
-
-  self.restartAnimationStep = 0
-  self.restartAnimationTimer = hs.timer.doEvery(0.3, function()
-    if self.restartAnimationStep == 0 then
-      self.menuBar:setTitle("🔄")
-      self.restartAnimationStep = 1
-    elseif self.restartAnimationStep == 1 then
-      self.menuBar:setTitle("⏳")
-      self.restartAnimationStep = 2
-    else
-      self.menuBar:setTitle("⚡")
-      self.restartAnimationStep = 0
-    end
-  end)
-
-  -- Track the stop-timer so it can be cancelled if a new animation starts
-  self.restartAnimationStopTimer = hs.timer.doAfter(3, function()
-    if self.restartAnimationTimer then
-      self.restartAnimationTimer:stop()
-      self.restartAnimationTimer = nil
-    end
-    self.restartAnimationStopTimer = nil
-    self:updateMenuBar()
-  end)
-end
-
 function obj:restartKanata(newDevices, suppressLog)
   self.logger.i("restartKanata called with devices: " .. table.concat(newDevices, ", "))
+
+  if self.activeManagementTask then
+    self.logger.i("Management operation already running — restart skipped")
+    return
+  end
 
   -- Cooldown guard: kanata briefly disconnects during a restart, which makes the
   -- next device-check poll see "new" devices and fire another restart immediately.
@@ -891,13 +861,6 @@ function obj:restartKanata(newDevices, suppressLog)
   end
   self.lastRestartTime = now
 
-  if not self:isKanataAvailable() then
-    self.logger.e("Kanata not available, stopping monitoring service")
-    self:stopMonitoring()
-    hs.alert.show("Kanata not available!\nStopping monitoring service.")
-    return
-  end
-  
   local deviceList = table.concat(newDevices, ", ")
   
   -- Check if Kanata service is already running
@@ -908,57 +871,30 @@ function obj:restartKanata(newDevices, suppressLog)
     self.logger.i("New device(s) detected: " .. deviceList .. " - Starting Kanata")
   end
   
-  -- Show restart animation in menu bar
-  self:showRestartAnimation()
-  
-  -- Determine which restart script to use
-  local scriptPath = self.restartScript
-  if not scriptPath and self.scriptsPath then
-    scriptPath = self.scriptsPath .. "/kanata-restart.sh"
-    if not self:fileExists(scriptPath) then
-      scriptPath = nil
-    end
-  end
-  
-  if not scriptPath then
+  if not self.restartScript then
     self.logger.w("No restart script configured or found")
     return
   end
   
   -- Run restart script with quiet flag to suppress "Service already running" messages
-  local args = {}
+  local args = { "--force-restart" }
   if suppressLog then
     table.insert(args, "--quiet")
   end
   
-  local task = hs.task.new(scriptPath, function(exitCode, stdOut, stdErr)
-    if exitCode == 0 then
-      self.logger.i("Kanata restart script completed successfully")
-    else
-      self.logger.w("Restart script exited with code " .. tostring(exitCode) .. " (may still succeed)")
-      if stdOut and stdOut ~= "" then
-        self.logger.e("Script output: " .. stdOut)
+  self:runManagementScript(self.restartScript, "Kanata restarted", {
+    arguments = args,
+    showAlert = not suppressLog,
+    onComplete = function(exitCode)
+      if exitCode ~= 0 then
+        hs.timer.doAfter(2, function()
+          if not self:isKanataServiceRunning() then
+            hs.alert.show("⚠️ Kanata may need attention", 3)
+          end
+        end)
       end
-      if stdErr and stdErr ~= "" then
-        self.logger.e("Script error: " .. stdErr)
-      end
-      -- Check if Kanata is actually running despite exit code
-      hs.timer.doAfter(2, function()
-        if self:isKanataServiceRunning() then
-          self.logger.i("Kanata is running (restart may have succeeded)")
-        else
-          hs.alert.show("⚠️ Kanata may need attention", 3)
-        end
-        self:updateMenuBar()
-      end)
     end
-  end, args)
-  
-  local success = task:start()
-  if not success then
-    self.logger.e("Failed to execute restart script: " .. scriptPath)
-    hs.alert.show("❌ Failed to execute restart script", 3)
-  end
+  })
 end
 
 function obj:setupConfigWatcher()
@@ -1090,10 +1026,13 @@ function obj:updateMenuBar()
     return
   end
   
-  -- Update icon based on monitoring and service status
+  -- Show script progress in place of the normal status icon.
   local kanataRunning = self:isKanataServiceRunning()
-  
-  if self.isMonitoring and kanataRunning then
+
+  if self.operationProgress then
+    self.menuBar:setTitle(tostring(self.operationProgress) .. "%")
+    self.menuBar:setTooltip(self.operationStatus or "Kanata operation in progress")
+  elseif self.isMonitoring and kanataRunning then
     -- Both monitoring and Kanata service are running
     self.menuBar:setTitle("⌨️")
     self.menuBar:setTooltip("Kanata monitoring: Active")
@@ -1124,30 +1063,35 @@ function obj:updateMenuBar()
       fn = function() self:startService() end
     })
   end
-  
-  
-  -- Add Raycast commands if enabled
-  if self.useRaycast then
-    table.insert(menu, { title = "-" }) -- Separator
-    
-    -- Add Raycast command menu items
-    table.insert(menu, {
-      title = "Restart Kanata",
-      fn = function() self:openRaycastCommand("kanata-restart") end
-    })
-    table.insert(menu, {
-      title = "Stop Kanata",
-      fn = function() self:openRaycastCommand("kanata-stop") end
-    })
-    table.insert(menu, {
-      title = "Install Kanata",
-      fn = function() self:openRaycastCommand("kanata-install") end
-    })
-    table.insert(menu, {
-      title = "Uninstall Kanata",
-      fn = function() self:openRaycastCommand("kanata-uninstall") end
-    })
-  end
+
+  table.insert(menu, { title = "-" })
+  table.insert(menu, {
+    title = "Install/Restart Kanata",
+    fn = function()
+      self:setServiceDesiredRunning(true)
+      self:runManagementScript(
+        self.restartScript or "kanata-install.sh",
+        "Kanata install/restart complete"
+      )
+    end
+  })
+  table.insert(menu, {
+    title = "Uninstall Kanata",
+    fn = function()
+      local choice = hs.dialog.blockAlert(
+        "Uninstall Kanata?",
+        "This stops and removes the Homebrew Kanata service. Your ~/.config/kanata files are preserved.",
+        "Uninstall",
+        "Cancel",
+        "warning"
+      )
+      if choice == "Uninstall" then
+        self:setServiceDesiredRunning(false)
+        self:stopMonitoring(true)
+        self:runManagementScript("kanata-uninstall.sh", "Kanata uninstalled")
+      end
+    end
+  })
   
   -- Configuration options
   table.insert(menu, { title = "-" })
@@ -1194,20 +1138,6 @@ function obj:updateMenuBar()
         hs.alert.show("startMonitoringOnLoad: " .. tostring(self.startMonitoringOnLoad))
       end
     },
-    { title = "Auto Start Kanata: " .. (self.autoStartKanata and "✓" or "✗"),
-      fn = function()
-        self.autoStartKanata = not self.autoStartKanata
-        self:updateMenuBar()
-        hs.alert.show("autoStartKanata: " .. tostring(self.autoStartKanata))
-      end
-    },
-    { title = "Use Raycast: " .. (self.useRaycast and "✓" or "✗"),
-      fn = function()
-        self.useRaycast = not self.useRaycast
-        self:updateMenuBar()
-        hs.alert.show("useRaycast: " .. tostring(self.useRaycast))
-      end
-    },
     { title = "Reload on Config Change: " .. (self.reloadOnConfigChange and "✓" or "✗"),
       fn = function()
         self.reloadOnConfigChange = not self.reloadOnConfigChange
@@ -1246,28 +1176,164 @@ function obj:updateMenuBar()
   self.menuBar:setMenu(menu)
 end
 
-function obj:openRaycastCommand(commandName)
-  local deeplink = "raycast://script-commands/" .. commandName
-  self.logger.i("Opening Raycast command: " .. deeplink)
-  
-  local result = hs.execute(string.format('open "%s"', deeplink))
-  if not result then
-    self.logger.w("Failed to open Raycast deeplink (is Raycast installed?)")
+function obj:setOperationProgress(percent, status, generation)
+  if generation and generation ~= self.operationGeneration then
+    return
   end
+
+  self.operationProgress = math.max(0, math.min(100, tonumber(percent) or 0))
+  self.operationStatus = status
+  self:updateMenuBar()
+end
+
+function obj:runManagementScript(scriptNameOrPath, successMessage, options)
+  options = options or {}
+  if self.activeManagementTask then
+    self.logger.w("A Kanata management operation is already running")
+    if options.showAlert ~= false then
+      hs.alert.show("A Kanata operation is already in progress")
+    end
+    return false
+  end
+
+  local scriptPath = scriptNameOrPath
+  if not scriptPath:match("^/") then
+    scriptPath = self.spoonPath .. "/scripts/" .. scriptNameOrPath
+  end
+  local scriptName = scriptPath:match("([^/]+)$") or scriptPath
+
+  if not self:fileExists(scriptPath) then
+    self.logger.e("Management script not found: " .. scriptPath)
+    hs.alert.show("Script not found:\n" .. scriptName)
+    return false
+  end
+
+  self.operationGeneration = self.operationGeneration + 1
+  local generation = self.operationGeneration
+  local streamBuffer = ""
+  local seenProgress = {}
+  self.ignoreDeviceChangesUntil = os.time() + self.restartCooldown
+  self:setOperationProgress(1, "Starting " .. scriptName, generation)
+  self.logger.i(scriptName .. " progress 1%: Starting")
+
+  local function consumeProgress(output, flush)
+    if output and output ~= "" then
+      streamBuffer = streamBuffer .. output
+    end
+
+    while true do
+      local newline = streamBuffer:find("\n", 1, true)
+      if not newline then
+        break
+      end
+      local line = streamBuffer:sub(1, newline - 1)
+      streamBuffer = streamBuffer:sub(newline + 1)
+      local percent, status = line:match("^KANATA_PROGRESS=(%d+):(.*)$")
+      if percent then
+        local progressKey = percent .. ":" .. status
+        if not seenProgress[progressKey] then
+          seenProgress[progressKey] = true
+          self.logger.i(scriptName .. " progress " .. percent .. "%: " .. status)
+          self:setOperationProgress(percent, status, generation)
+        end
+      end
+    end
+
+    if flush and streamBuffer ~= "" then
+      local percent, status = streamBuffer:match("^KANATA_PROGRESS=(%d+):(.*)$")
+      if percent then
+        local progressKey = percent .. ":" .. status
+        if not seenProgress[progressKey] then
+          seenProgress[progressKey] = true
+          self.logger.i(scriptName .. " progress " .. percent .. "%: " .. status)
+          self:setOperationProgress(percent, status, generation)
+        end
+      end
+      streamBuffer = ""
+    end
+  end
+
+  local task = hs.task.new(scriptPath, function(exitCode, stdOut, stdErr)
+    consumeProgress(stdOut, true)
+    self.activeManagementTask = nil
+    self.kanataBinaryPath = nil
+    self.ignoreDeviceChangesUntil = os.time() + math.max(self.restartCooldown, self.checkInterval * 2)
+
+    if exitCode == 0 then
+      self.logger.i(scriptName .. " completed successfully")
+      self:setOperationProgress(100, successMessage, generation)
+      if options.showAlert ~= false then
+        hs.alert.show("✅ " .. successMessage)
+      end
+    else
+      self.logger.e(scriptName .. " failed with exit code " .. tostring(exitCode))
+      if stdOut and stdOut ~= "" then
+        self.logger.e("Script output: " .. stdOut)
+      end
+      if stdErr and stdErr ~= "" then
+        self.logger.e("Script error: " .. stdErr)
+      end
+      self.operationStatus = scriptName .. " failed"
+      self:updateMenuBar()
+      if options.showAlert ~= false then
+        hs.alert.show("❌ " .. scriptName .. " failed\nCheck Hammerspoon Console")
+      end
+    end
+
+    if options.onComplete then
+      options.onComplete(exitCode, stdOut, stdErr)
+    end
+
+    hs.timer.doAfter(0.75, function()
+      if self.operationGeneration == generation and not self.activeManagementTask then
+        self.operationProgress = nil
+        self.operationStatus = nil
+        self:updateMenuBar()
+      end
+    end)
+  end, function(streamTask, stdOut, stdErr)
+    -- Hammerspoon may invoke the stream callback once more after completion.
+    -- Ignore that final nil-task call so stale output cannot restore progress.
+    if streamTask then
+      consumeProgress(stdOut, false)
+    end
+    if stdErr and stdErr ~= "" then
+      self.logger.d(scriptName .. " stderr: " .. stdErr)
+    end
+    return true
+  end, options.arguments or {})
+
+  if not task or not task:start() then
+    self.logger.e("Failed to execute management script: " .. scriptPath)
+    self.operationProgress = nil
+    self.operationStatus = nil
+    self:updateMenuBar()
+    hs.alert.show("❌ Failed to start " .. scriptName)
+    return false
+  end
+
+  self.activeManagementTask = task
+  return true
 end
 
 function obj:startService()
   self.logger.i("Starting Kanata service and monitoring")
+  self:setServiceDesiredRunning(true)
   
   -- Start Kanata if not running
   if not self:isKanataServiceRunning() then
-    local success = self:startKanataService()
+    local success = self:startKanataService(function(exitCode)
+      if exitCode == 0 then
+        if not self.isMonitoring then
+          self:startMonitoring(true)
+        end
+        hs.alert.show("✅ Service started")
+      end
+    end)
     if not success then
       hs.alert.show("Failed to start Kanata service")
-      return
     end
-    -- Give Kanata time to start
-    hs.timer.usleep(1500000) -- 1.5 seconds
+    return
   end
   
   -- Start monitoring if not running
@@ -1283,24 +1349,17 @@ end
 
 function obj:stopService()
   self.logger.i("Stopping Kanata service and monitoring")
+  self:setServiceDesiredRunning(false)
 
   if self.isMonitoring then
     self:stopMonitoring(true)
   end
 
-  if self:isKanataServiceRunning() then
-    local stopScript = self.spoonPath .. "/scripts/kanata-stop.sh"
-    if self:fileExists(stopScript) then
-      self.logger.i("Stopping Kanata via stop script")
-      hs.execute(string.format('bash "%s" &', stopScript))
-    else
-      self.logger.w("kanata-stop.sh not found at: " .. stopScript)
-    end
-    hs.timer.usleep(500000)
-  end
-
-  self:updateMenuBar()
-  hs.alert.show("✅ Service stopped")
+  self:runManagementScript(
+    self.restartScript or "kanata-install.sh",
+    "Kanata service stopped",
+    { arguments = { "--stop" } }
+  )
 end
 
 function obj:openFile(filePath)
@@ -1348,14 +1407,21 @@ function obj:quitHammerspoon()
   end
 
   if self:isKanataServiceRunning() then
-    local stopScript = self.spoonPath .. "/scripts/kanata-stop.sh"
-    if self:fileExists(stopScript) then
-      self.logger.i("Stopping Kanata via stop script")
-      hs.execute(string.format('bash "%s" &', stopScript))
-    else
-      self.logger.w("kanata-stop.sh not found — Kanata service will keep running")
+    local started = self:runManagementScript(
+      self.restartScript or "kanata-install.sh",
+      "Kanata service stopped",
+      {
+        arguments = { "--stop" },
+        showAlert = false,
+        onComplete = function()
+          self.logger.i("Quitting Hammerspoon...")
+          hs.osascript.applescript('tell application "Hammerspoon" to quit')
+        end
+      }
+    )
+    if started then
+      return
     end
-    hs.timer.usleep(500000)
   end
 
   self.logger.i("Quitting Hammerspoon...")
